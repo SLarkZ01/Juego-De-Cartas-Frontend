@@ -1,0 +1,406 @@
+openapi: 3.0.3
+info:
+  title: Juego De Cartas API
+  version: 0.0.1
+  description: API para el backend de Juego De Cartas. Especificación generada manualmente a partir del código fuente.
+servers:
+  - url: http://localhost:8080
+    description: Development server
+
+paths:
+  /api/cartas:
+    get:
+      summary: Listar cartas
+      description: Lista todas las cartas. Se puede filtrar por temática con query param 'tematica'.
+      parameters:
+        - in: query
+          name: tematica
+          schema:
+            type: string
+          required: false
+      responses:
+        '200':
+          description: Lista de cartas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Carta'
+
+  /api/cartas/{codigo}:
+    get:
+      summary: Obtener carta
+      description: Obtiene una carta por su código. Devuelve 404 si no existe.
+      parameters:
+        - in: path
+          name: codigo
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Carta encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Carta'
+        '404':
+          description: No encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/cartas/sincronizar:
+    post:
+      summary: Sincronizar cartas
+      description: Sincroniza cartas desde la API externa DragonBall y devuelve las cartas importadas.
+      responses:
+        '200':
+          description: Cartas sincronizadas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Carta'
+
+  /api/partidas/crear:
+    post:
+      summary: Crear partida
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CrearPartidaRequest'
+      responses:
+        '200':
+          description: Partida creada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartidaResponse'
+
+  /api/partidas/{codigo}/unirse:
+    post:
+      summary: Unirse a partida
+      parameters:
+        - in: path
+          name: codigo
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnirsePartidaRequest'
+      responses:
+        '200':
+          description: Unido a la partida
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartidaResponse'
+
+  /api/partidas/{codigo}:
+    get:
+      summary: Obtener partida
+      parameters:
+        - in: path
+          name: codigo
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Información de la partida
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartidaResponse'
+
+  /api/partidas/{codigo}/iniciar:
+    post:
+      summary: Iniciar partida
+      parameters:
+        - in: path
+          name: codigo
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Partida iniciada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Partida'
+
+  /api/partidas/{codigo}/seleccionar-atributo:
+    post:
+      summary: Seleccionar atributo
+      parameters:
+        - in: path
+          name: codigo
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SeleccionarAtributoRequest'
+      responses:
+        '200':
+          description: OK
+
+  /api/partidas/{codigo}/jugar:
+    post:
+      summary: Jugar carta
+      parameters:
+        - in: path
+          name: codigo
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JugarCartaRequest'
+      responses:
+        '200':
+          description: OK
+
+  /api/partidas/{codigo}/transformaciones/activar:
+    post:
+      summary: Activar transformación
+      parameters:
+        - in: path
+          name: codigo
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivarTransformacionRequest'
+      responses:
+        '200':
+          description: Transformación activada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransformacionResponse'
+
+  /api/partidas/{codigo}/transformaciones/desactivar:
+    post:
+      summary: Desactivar transformación
+      parameters:
+        - in: path
+          name: codigo
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DesactivarTransformacionRequest'
+      responses:
+        '200':
+          description: Transformación desactivada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransformacionResponse'
+
+components:
+  schemas:
+    Carta:
+      type: object
+      properties:
+        id:
+          type: string
+        codigo:
+          type: string
+        nombre:
+          type: string
+        imagenUrl:
+          type: string
+        atributos:
+          type: object
+          additionalProperties:
+            type: integer
+        tematica:
+          type: string
+        paquete:
+          type: integer
+        descripcion:
+          type: string
+        raza:
+          type: string
+        transformaciones:
+          type: array
+          items:
+            type: object
+            properties:
+              nombre:
+                type: string
+              imagen:
+                type: string
+              ki:
+                type: string
+
+    CrearPartidaRequest:
+      type: object
+      properties:
+        nombreJugador:
+          type: string
+      required: [nombreJugador]
+
+    UnirsePartidaRequest:
+      type: object
+      properties:
+        nombreJugador:
+          type: string
+      required: [nombreJugador]
+
+    SeleccionarAtributoRequest:
+      type: object
+      properties:
+        jugadorId:
+          type: string
+        atributo:
+          type: string
+      required: [jugadorId, atributo]
+
+    JugarCartaRequest:
+      type: object
+      properties:
+        jugadorId:
+          type: string
+      required: [jugadorId]
+
+    ActivarTransformacionRequest:
+      type: object
+      properties:
+        jugadorId:
+          type: string
+        indiceTransformacion:
+          type: integer
+          minimum: 0
+      required: [jugadorId, indiceTransformacion]
+
+    DesactivarTransformacionRequest:
+      type: object
+      properties:
+        jugadorId:
+          type: string
+      required: [jugadorId]
+
+    TransformacionResponse:
+      type: object
+      properties:
+        jugadorId:
+          type: string
+        nombreJugador:
+          type: string
+        nombreTransformacion:
+          type: string
+          nullable: true
+        indiceTransformacion:
+          type: integer
+        multiplicador:
+          type: number
+          format: double
+        mensaje:
+          type: string
+        exitoso:
+          type: boolean
+
+    PartidaResponse:
+      type: object
+      properties:
+        codigo:
+          type: string
+        jugadorId:
+          type: string
+        jugadores:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              nombre:
+                type: string
+
+    Partida:
+      type: object
+      properties:
+        id:
+          type: string
+        codigo:
+          type: string
+        estado:
+          type: string
+        jugadores:
+          type: array
+          items:
+            $ref: '#/components/schemas/Jugador'
+        cartasEnMesa:
+          type: array
+          items:
+            type: object
+        turnoActual:
+          type: string
+        atributoSeleccionado:
+          type: string
+        ganador:
+          type: string
+        tiempoLimite:
+          type: integer
+
+    Jugador:
+      type: object
+      properties:
+        id:
+          type: string
+        nombre:
+          type: string
+        cartasEnMano:
+          type: array
+          items:
+            type: string
+        cartaActual:
+          type: string
+        numeroCartas:
+          type: integer
+        orden:
+          type: integer
+        conectado:
+          type: boolean
+        transformacionActiva:
+          type: string
+        indiceTransformacion:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      properties:
+        mensaje:
+          type: string
+        codigo:
+          type: integer
+        timestamp:
+          type: integer
