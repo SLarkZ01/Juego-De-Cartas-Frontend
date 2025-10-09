@@ -1,8 +1,10 @@
 openapi: 3.0.3
 info:
   title: Juego De Cartas API
-  version: 0.0.1
-  description: API para el backend de Juego De Cartas. Especificación generada manualmente a partir del código fuente.
+  version: 1.0.0
+  description: >-
+    API REST para el backend de "Juego De Cartas" (Card Match Battle).
+    Especificación alineada con los controladores actuales en `src/main/java/.../controller/rest`.
 servers:
   - url: http://localhost:8080
     description: Development server
@@ -11,7 +13,7 @@ paths:
   /api/cartas:
     get:
       summary: Listar cartas
-      description: Lista todas las cartas. Se puede filtrar por temática con query param 'tematica'.
+      description: Lista todas las cartas. Puede filtrarse por temática con el query parameter `tematica`.
       parameters:
         - in: query
           name: tematica
@@ -30,8 +32,7 @@ paths:
 
   /api/cartas/{codigo}:
     get:
-      summary: Obtener carta
-      description: Obtiene una carta por su código. Devuelve 404 si no existe.
+      summary: Obtener carta por código
       parameters:
         - in: path
           name: codigo
@@ -46,7 +47,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Carta'
         '404':
-          description: No encontrada
+          description: Carta no encontrada
           content:
             application/json:
               schema:
@@ -54,8 +55,7 @@ paths:
 
   /api/cartas/sincronizar:
     post:
-      summary: Sincronizar cartas
-      description: Sincroniza cartas desde la API externa DragonBall y devuelve las cartas importadas.
+      summary: Sincronizar cartas desde API externa
       responses:
         '200':
           description: Cartas sincronizadas
@@ -85,7 +85,7 @@ paths:
 
   /api/partidas/{codigo}/unirse:
     post:
-      summary: Unirse a partida
+      summary: Unirse a partida existente
       parameters:
         - in: path
           name: codigo
@@ -100,7 +100,7 @@ paths:
               $ref: '#/components/schemas/UnirsePartidaRequest'
       responses:
         '200':
-          description: Unido a la partida
+          description: Jugador unido exitosamente
           content:
             application/json:
               schema:
@@ -108,7 +108,7 @@ paths:
 
   /api/partidas/{codigo}:
     get:
-      summary: Obtener partida
+      summary: Obtener información básica de la partida
       parameters:
         - in: path
           name: codigo
@@ -122,6 +122,88 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PartidaResponse'
+
+  /api/partidas/{codigo}/detalle:
+    get:
+      summary: Obtener detalle completo de la partida para un jugador
+      description: >-
+        Devuelve la vista de la partida desde la perspectiva de `jugadorId`.
+        Incluye `miJugador` con las cartas en mano del jugador solicitado y `jugadores`
+        con la información pública del resto.
+      parameters:
+        - in: path
+          name: codigo
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: jugadorId
+          required: true
+          schema:
+            type: string
+          description: ID del jugador que solicita el detalle (se usa para devolver `miJugador`)
+      responses:
+        '200':
+          description: Detalle de la partida para el jugador
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartidaDetailResponse'
+              example:
+                codigo: "ABC123"
+                jugadorId: "player-uuid-1234"
+                estado: "EN_CURSO"
+                turnoActual: "player-uuid-5678"
+                atributoSeleccionado: "poder"
+                jugadores:
+                  - id: "player-uuid-1234"
+                    nombre: "Goku"
+                    numeroCartas: 5
+                    orden: 1
+                    conectado: true
+                  - id: "player-uuid-5678"
+                    nombre: "Vegeta"
+                    numeroCartas: 5
+                    orden: 2
+                    conectado: true
+                miJugador:
+                  id: "player-uuid-1234"
+                  nombre: "Goku"
+                  cartasEnMano:
+                    - "1A"
+                    - "2B"
+                    - "3C"
+                  cartaActual: "1A"
+                  numeroCartas: 5
+                  transformacionActiva: "Super Saiyan"
+                  indiceTransformacion: 0
+                tiempoRestante: 1200
+
+        '400':
+          description: Parámetros inválidos (ej. falta jugadorId)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                status: 400
+                error: "Bad Request"
+                message: "Parámetro 'jugadorId' es obligatorio"
+                path: "/api/partidas/ABC123/detalle"
+                timestamp: "2025-10-09T12:00:00Z"
+
+        '404':
+          description: Partida o jugador no encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                status: 404
+                error: "Not Found"
+                message: "Partida 'ABC123' no encontrada"
+                path: "/api/partidas/ABC123/detalle"
+                timestamp: "2025-10-09T12:00:00Z"
 
   /api/partidas/{codigo}/iniciar:
     post:
@@ -142,7 +224,7 @@ paths:
 
   /api/partidas/{codigo}/seleccionar-atributo:
     post:
-      summary: Seleccionar atributo
+      summary: Seleccionar atributo para la ronda
       parameters:
         - in: path
           name: codigo
@@ -157,11 +239,11 @@ paths:
               $ref: '#/components/schemas/SeleccionarAtributoRequest'
       responses:
         '200':
-          description: OK
+          description: Atributo seleccionado exitosamente
 
   /api/partidas/{codigo}/jugar:
     post:
-      summary: Jugar carta
+      summary: Jugar carta en la ronda actual
       parameters:
         - in: path
           name: codigo
@@ -176,7 +258,7 @@ paths:
               $ref: '#/components/schemas/JugarCartaRequest'
       responses:
         '200':
-          description: OK
+          description: Carta jugada exitosamente
 
   /api/partidas/{codigo}/transformaciones/activar:
     post:
@@ -249,6 +331,21 @@ components:
           type: string
         raza:
           type: string
+        genero:
+          type: string
+        afiliacion:
+          type: string
+        planeta:
+          type: object
+          properties:
+            nombre:
+              type: string
+            imagen:
+              type: string
+            descripcion:
+              type: string
+            isDestroyed:
+              type: boolean
         transformaciones:
           type: array
           items:
@@ -371,6 +468,28 @@ components:
         tiempoLimite:
           type: integer
 
+    PartidaDetailResponse:
+      type: object
+      properties:
+        codigo:
+          type: string
+        jugadorId:
+          type: string
+        estado:
+          type: string
+        turnoActual:
+          type: string
+        atributoSeleccionado:
+          type: string
+        jugadores:
+          type: array
+          items:
+            $ref: '#/components/schemas/JugadorPublic'
+        miJugador:
+          $ref: '#/components/schemas/JugadorPrivate'
+        tiempoRestante:
+          type: integer
+
     Jugador:
       type: object
       properties:
@@ -395,12 +514,50 @@ components:
         indiceTransformacion:
           type: integer
 
+    JugadorPublic:
+      type: object
+      properties:
+        id:
+          type: string
+        nombre:
+          type: string
+        numeroCartas:
+          type: integer
+        orden:
+          type: integer
+        conectado:
+          type: boolean
+
+    JugadorPrivate:
+      type: object
+      properties:
+        id:
+          type: string
+        nombre:
+          type: string
+        cartasEnMano:
+          type: array
+          items:
+            type: string
+        cartaActual:
+          type: string
+        numeroCartas:
+          type: integer
+        transformacionActiva:
+          type: string
+        indiceTransformacion:
+          type: integer
+
     ErrorResponse:
       type: object
       properties:
-        mensaje:
+        status:
+          type: integer
+        error:
           type: string
-        codigo:
-          type: integer
+        message:
+          type: string
+        path:
+          type: string
         timestamp:
-          type: integer
+          type: string
