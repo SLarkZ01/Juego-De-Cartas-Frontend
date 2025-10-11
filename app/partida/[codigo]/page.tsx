@@ -16,7 +16,7 @@ export default function PartidaPage() {
   const router = useRouter();
   const codigo = params?.codigo as string;
   
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, loading: authLoading } = useAuth() as any;
   const {
     partida,
     loading,
@@ -33,24 +33,71 @@ export default function PartidaPage() {
     setJugadorId,
   } = usePartida(codigo);
 
+  // Debounce visual del estado conectado para evitar flicker corto
+  const [visualConectado, setVisualConectado] = useState<boolean>(conectado);
+  useEffect(() => {
+    let t: number | undefined;
+    if (conectado) {
+      setVisualConectado(true);
+    } else {
+      t = window.setTimeout(() => setVisualConectado(false), 800);
+    }
+    return () => {
+      if (t) clearTimeout(t);
+    };
+  }, [conectado]);
+
   const [cartasDisponibles, setCartasDisponibles] = useState<Carta[]>([]);
   const [mensajeEvento, setMensajeEvento] = useState<string>('');
 
   useEffect(() => {
-    if (!isAuthenticated) router.push('/login');
-  }, [isAuthenticated, router]);
+    // esperar a que el contexto de auth haya cargado antes de redirigir
+    if (!authLoading && !isAuthenticated) router.push('/login');
+  }, [isAuthenticated, router, authLoading]);
 
   useEffect(() => {
-    if (!codigo || !isAuthenticated) return;
+    if (!codigo) return;
 
     const init = async () => {
       try {
-        const savedJugadorId = localStorage.getItem(`jugadorId_${codigo}`);
+        let savedJugadorId = undefined;
+        try {
+          savedJugadorId = localStorage.getItem(`jugadorId_${codigo}`) || undefined;
+        } catch (e) {
+          console.warn('No se pudo leer jugadorId de localStorage en init:', e);
+        }
+
         if (savedJugadorId) {
           setJugadorId(savedJugadorId);
           await cargarDetalle(codigo, savedJugadorId);
         } else {
-          await cargarDetalle(codigo, user?.userId);
+          // Intentar reconectar vía REST sin jugadorId (usar token en cookie si está presente)
+          try {
+            const resp = await (await import('@/services/partida.service')).partidaService.reconectarPartida(codigo);
+            if (resp && resp.jugadorId) {
+              setJugadorId(resp.jugadorId);
+              try { localStorage.setItem(`jugadorId_${codigo}`, resp.jugadorId); } catch (e) {}
+              // cargar detalle con el jugadorId
+              await cargarDetalle(codigo, resp.jugadorId);
+              // Si el backend está algo retrasado en publicar el estado completo, intentar un par de reintentos cortos
+              (async () => {
+                try {
+                  await new Promise(r => setTimeout(r, 300));
+                  await cargarDetalle(codigo, resp.jugadorId);
+                  await new Promise(r => setTimeout(r, 700));
+                  await cargarDetalle(codigo, resp.jugadorId);
+                } catch (e) {
+                  // ignore
+                }
+              })();
+            } else {
+              // fallback: intentar cargar detalle sin jugadorId (puede devolver vista pública)
+              await cargarDetalle(codigo, user?.userId);
+            }
+          } catch (reErr) {
+            console.warn('Reconectar sin jugadorId falló (continuando):', reErr);
+            await cargarDetalle(codigo, user?.userId);
+          }
         }
 
         await conectarWebSocket(codigo);
@@ -168,9 +215,9 @@ export default function PartidaPage() {
               </div>
 
               <div className="flex items-center gap-4">
-                <div className={`flex items-center gap-2 px-4 py-2 rounded-lg ${conectado ? 'bg-green-900/30 border border-green-500' : 'bg-red-900/30 border border-red-500'}`}>
-                  <div className={`w-3 h-3 rounded-full ${conectado ? 'bg-green-500' : 'bg-red-500'} animate-pulse`} />
-                  <span className="text-sm text-white">{conectado ? 'Conectado' : 'Desconectado'}</span>
+                <div className={`flex items-center gap-2 px-4 py-2 rounded-lg ${visualConectado ? 'bg-green-900/30 border border-green-500' : 'bg-red-900/30 border border-red-500'}`}>
+                  <div className={`w-3 h-3 rounded-full ${visualConectado ? 'bg-green-500' : 'bg-red-500'} animate-pulse`} />
+                  <span className="text-sm text-white">{visualConectado ? 'Conectado' : 'Desconectado'}</span>
                 </div>
                 <Button onClick={() => router.push('/jugar')} variant="outline">Salir</Button>
               </div>

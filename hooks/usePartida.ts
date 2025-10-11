@@ -23,6 +23,13 @@ export function usePartida(codigoPartida?: string) {
   const [conectado, setConectado] = useState(false);
   
   const jugadorIdRef = useRef<string | null>(null);
+  const disconnectTimerRef = useRef<number | null>(null);
+  const [jugadorIdState, setJugadorIdState] = useState<string | null>(null);
+
+  function setJugadorIdRef(id: string | null) {
+    jugadorIdRef.current = id;
+    setJugadorIdState(id);
+  }
 
   /**
    * Crear nueva partida
@@ -32,8 +39,8 @@ export function usePartida(codigoPartida?: string) {
     setError(null);
     
     try {
-      const response = await partidaService.crearPartida();
-      jugadorIdRef.current = response.jugadorId;
+  const response = await partidaService.crearPartida();
+  setJugadorIdRef(response.jugadorId);
       // Persistir jugadorId para que la nueva página (lobby) pueda recuperar la identidad
       try {
         if (response && response.codigo && response.jugadorId) {
@@ -42,6 +49,7 @@ export function usePartida(codigoPartida?: string) {
       } catch (e) {
         console.warn('No se pudo guardar jugadorId en localStorage:', e);
       }
+      // Note: page will call cargarDetalle on mount; avoid calling it here to keep flow simple
       return response;
     } catch (err: any) {
       const errorMsg = err.message || 'Error al crear partida';
@@ -61,7 +69,7 @@ export function usePartida(codigoPartida?: string) {
     
     try {
       const response = await partidaService.unirsePartida(codigo);
-      jugadorIdRef.current = response.jugadorId;
+      setJugadorIdRef(response.jugadorId);
       // Persistir jugadorId para que la página de la partida lo recupere al montar
       try {
         if (response && response.codigo && response.jugadorId) {
@@ -84,7 +92,7 @@ export function usePartida(codigoPartida?: string) {
    * Cargar detalle de la partida
    */
   const cargarDetalle = useCallback(async (codigo: string, jugadorId?: string) => {
-    const jId = jugadorId || jugadorIdRef.current;
+    const jId = jugadorId || jugadorIdRef.current || jugadorIdState || undefined;
     if (!jId) {
       setError('ID de jugador no disponible');
       return;
@@ -95,6 +103,11 @@ export function usePartida(codigoPartida?: string) {
     
     try {
       const detalle = await partidaService.obtenerPartidaDetalle(codigo, jId);
+      if (process.env.NODE_ENV === 'development') {
+        try {
+          console.log('[usePartida] detalle obtenido:', { codigo, jugadorId: jId, detalleSnippet: { jugadores: detalle.jugadores?.length, miJugador: detalle.miJugador ? true : false } });
+        } catch (e) {}
+      }
       setPartida(detalle);
       return detalle;
     } catch (err: any) {
@@ -232,8 +245,8 @@ export function usePartida(codigoPartida?: string) {
           try {
             const persisted = localStorage.getItem(`jugadorId_${codigo}`);
             if (persisted) {
-              jugadorIdRef.current = persisted;
-            }
+                  setJugadorIdRef(persisted);
+                }
           } catch (e) {
             console.warn('No se pudo leer jugadorId de localStorage:', e);
           }
@@ -244,21 +257,72 @@ export function usePartida(codigoPartida?: string) {
         const jugadorIdToSend = savedJugadorId || user?.userId;
 
         if (jugadorIdToSend) {
-          console.log('[usePartida] Intentando reconectar jugador en backend:', jugadorIdToSend);
-          const resp = await partidaService.reconectarPartida(codigo, jugadorIdToSend);
-          // Si el backend devuelve jugadorId, actualizar ref y persistir
-          if (resp?.jugadorId) {
-            jugadorIdRef.current = resp.jugadorId;
+          console.log('[usePartida] Intentando reconectar jugador en backend (con reintentos):', jugadorIdToSend);
+          // Retry reconectar up to 3 times with linear backoff
+          let resp: PartidaResponse | null = null;
+          let lastErr: any = null;
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              resp = await partidaService.reconectarPartida(codigo, jugadorIdToSend);
+              lastErr = null;
+              break;
+            } catch (e) {
+              lastErr = e;
+              console.warn(`[usePartida] reconectarPartida attempt ${attempt} failed:`, e);
+              await new Promise((r) => setTimeout(r, 150 * attempt));
+            }
+          }
+
+          if (lastErr) {
+            console.warn('[usePartida] Reconectar failed after retries (continuando):', lastErr);
+          }
+
+          if (resp && resp.jugadorId) {
+            setJugadorIdRef(resp.jugadorId);
             try {
               localStorage.setItem(`jugadorId_${codigo}`, resp.jugadorId);
             } catch (e) {
               console.warn('No se pudo persistir jugadorId tras reconectar:', e);
             }
+
+            // expose jugadorId to consumers via setJugadorId side-effect if provided
+            // (the page sets it via hook.setJugadorId)
           }
+
           // Actualizar partida local si se devuelve estado
           if (resp && (resp as any).jugadores) {
             // Merge básico
             setPartida((prev) => ({ ...(prev as any), ...(resp as any) } as PartidaDetailResponse));
+          }
+
+          // Si el backend no nos reportó inmediatamente como conectado, hacer polling
+          // por un tiempo corto para esperar a que el backend confirme la reconexión
+          try {
+            const jugadorIdToCheck = resp?.jugadorId || jugadorIdToSend;
+            if (jugadorIdToCheck) {
+              const start = Date.now();
+              const timeout = 3000; // ms
+              let confirmado = false;
+              while (Date.now() - start < timeout && !confirmado) {
+                try {
+                  const detalle = await partidaService.obtenerPartidaDetalle(codigo, jugadorIdToCheck as string);
+                  if (detalle && detalle.miJugador && (detalle.miJugador as any).conectado) {
+                    setPartida(detalle);
+                    confirmado = true;
+                    break;
+                  }
+                } catch (e) {
+                  // ignore and retry
+                }
+                await new Promise((r) => setTimeout(r, 250));
+              }
+
+              if (!confirmado) {
+                console.warn('[usePartida] No se confirmó reconexión en el intervalo esperado (continuando)');
+              }
+            }
+          } catch (pollErr) {
+            console.warn('[usePartida] Error durante polling de reconexión (continuando):', pollErr);
           }
         }
       } catch (reErr) {
@@ -277,7 +341,8 @@ export function usePartida(codigoPartida?: string) {
         setEventos((prev) => [evento, ...prev].slice(0, 100)); // Mantener últimos 100 eventos
 
         // Actualizar estado según el tipo de evento
-        if (evento.tipo === 'ESTADO_ACTUALIZADO' && evento.datos) {
+  const tipoStr = String(evento.tipo);
+  if ((tipoStr === 'ESTADO_ACTUALIZADO' || tipoStr === 'PARTIDA_ESTADO') && evento.datos) {
           setPartida((prev) => {
             if (!prev) return evento.datos as PartidaDetailResponse;
             return {
@@ -285,15 +350,31 @@ export function usePartida(codigoPartida?: string) {
               ...evento.datos,
             } as PartidaDetailResponse;
           });
-        } else if (evento.tipo === 'JUGADOR_UNIDO' && evento.datos) {
+  } else if (String(evento.tipo) === 'JUGADOR_UNIDO') {
           // Actualizar lista de jugadores cuando alguien se une
-          setPartida((prev) => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              jugadores: evento.datos.jugadores || prev.jugadores,
-            };
-          });
+          // Algunos eventos JUGADOR_UNIDO pueden ser compactos y no traer la lista completa;
+          // en ese caso forzamos a recargar el detalle desde el servidor.
+          if (evento.datos && (evento.datos as any).jugadores && (evento.datos as any).jugadores.length > 0) {
+            setPartida((prev) => {
+              if (!prev) return evento.datos as PartidaDetailResponse;
+              return {
+                ...prev,
+                jugadores: (evento.datos as any).jugadores || prev.jugadores,
+              } as PartidaDetailResponse;
+            });
+          } else {
+            // Fallback: pedir detalle completo al servidor
+            (async () => {
+              try {
+                const jId = jugadorIdRef.current || undefined;
+                if (!codigo) return;
+                const detalle = await partidaService.obtenerPartidaDetalle(codigo, jId as string);
+                setPartida(detalle);
+              } catch (err) {
+                console.warn('[usePartida] No se pudo recargar detalle tras JUGADOR_UNIDO:', err);
+              }
+            })();
+          }
         } else if (evento.tipo === 'PARTIDA_INICIADA' && evento.datos) {
           // Actualizar estado cuando la partida inicia
           setPartida((prev) => {
@@ -355,7 +436,7 @@ export function usePartida(codigoPartida?: string) {
     error,
     eventos,
     conectado,
-    jugadorId: jugadorIdRef.current,
+    jugadorId: jugadorIdState,
     
     // Métodos
     crearPartida,
@@ -371,9 +452,7 @@ export function usePartida(codigoPartida?: string) {
     enviarAccion,
     
     // Helper para establecer jugadorId manualmente si es necesario
-    setJugadorId: (id: string) => {
-      jugadorIdRef.current = id;
-    },
+    setJugadorId: (id: string) => setJugadorIdRef(id),
   };
 }
 

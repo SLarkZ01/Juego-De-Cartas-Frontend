@@ -2,7 +2,9 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 // Rutas que requieren autenticación
-const protectedRoutes = ['/jugar', '/partida'];
+// Nota: permitimos que `/partida/*` cargue sin token para que el cliente pueda
+// intentar la reconexión (reconnect REST + WS) al recargar la página.
+const protectedRoutes = ['/jugar'];
 
 // Rutas de autenticación (no accesibles si ya está autenticado)
 const authRoutes = ['/login', '/register'];

@@ -11,15 +11,18 @@ Esta guía detalla cómo integrar el backend del Juego de Cartas con una aplicac
 - [Manejo de Errores](#manejo-de-errores)
 - [Ejemplos Completos](#ejemplos-completos)
 
----
-
 ## 🚀 Configuración Inicial
 
 ### 1. Variables de Entorno
 
 Crea un archivo `.env.local` en tu proyecto Next.js:
 
-```env
+  // incluir partidaCodigo si está disponible para acelerar la asociación en el servidor
+  client.publish({
+    destination: '/app/partida/registrar',
+    body: JSON.stringify({ jugadorId: user.userId, partidaCodigo }),
+    skipContentLengthHeader: true
+  });
 NEXT_PUBLIC_API_URL=http://localhost:8080
 NEXT_PUBLIC_WS_URL=ws://localhost:8080/ws
 ```

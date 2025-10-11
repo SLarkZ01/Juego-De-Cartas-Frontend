@@ -57,6 +57,11 @@ Detalles técnicos:
 - `WebSocketEventListener` programa la desconexión diferida al recibir `SessionDisconnectEvent`.
 - `PartidaServiceImpl` cancela tareas pendientes cuando se reconecta por REST.
 - El tiempo por defecto es 5 segundos (configurable en el servicio si se desea).
+   - El tiempo por defecto es 5 segundos y ahora es configurable mediante la propiedad Spring `app.disconnect.graceSeconds`.
+
+Además:
+- `PartidaWebSocketController` admite que el mensaje enviado a `/app/partida/registrar` incluya opcionalmente `partidaCodigo` para que el servidor marque inmediatamente `conectado=true` y asocie la sesión a la partida indicada.
+- El endpoint `POST /api/partidas/{codigo}/reconectar` registra información en logs (partida y jugadorId cuando se recibe) para facilitar debugging.
 
 ### Controladores WebSocket
 

@@ -762,6 +762,16 @@ components:
         indiceTransformacion:
           type: integer
 
+    ReconectarRequest:
+      type: object
+      properties:
+        jugadorId:
+          type: string
+          description: ID del jugador (opcional). Si se provee, se reconectará ese jugador.
+        partidaCodigo:
+          type: string
+          description: Código de la partida (opcional). Si se incluye en el registro WS, el servidor marcará conectado=true y publicará el estado.
+
     ErrorResponse:
       type: object
       properties:

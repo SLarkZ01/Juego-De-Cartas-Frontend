@@ -3,6 +3,37 @@ import SockJS from 'sockjs-client';
 import type { EventoWebSocket, WsActionRequest } from '@/types/api';
 import { authService } from '@/services/auth.service';
 
+// Configurable delay (ms) to wait after publishing registration before subscribing
+const REGISTRATION_DELAY_MS = Number(process.env.NEXT_PUBLIC_WS_REG_DELAY_MS) || 300;
+const REGISTRATION_ATTEMPTS = 3;
+
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
+async function publishRegistrationWithRetry(client: Client, codigoPartida: string, jugadorId: string) {
+  let lastErr: any = null;
+  for (let attempt = 1; attempt <= REGISTRATION_ATTEMPTS; attempt++) {
+    try {
+      client.publish({
+        destination: '/app/partida/registrar',
+        body: JSON.stringify({ jugadorId, partidaCodigo: codigoPartida }),
+        skipContentLengthHeader: true,
+      });
+
+      console.log(`📤 Registrando jugadorId en WS (attempt ${attempt}): ${jugadorId}`);
+      // Wait briefly to allow backend to register mapping before subscription
+      await sleep(REGISTRATION_DELAY_MS);
+      return;
+    } catch (e) {
+      lastErr = e;
+      console.warn(`⚠️ Error publicando registro (attempt ${attempt}):`, e);
+      // backoff before retrying
+      if (attempt < REGISTRATION_ATTEMPTS) await sleep(100 * attempt);
+    }
+  }
+
+  throw lastErr;
+}
+
 /**
  * Servicio de WebSocket con STOMP
  * Maneja conexiones WebSocket en tiempo real con autenticación JWT
@@ -38,23 +69,10 @@ export class WebSocketService {
       },
 
       onConnect: () => {
+        // Conectado: no publicamos registro aquí porque no conocemos el codigo de partida.
+        // El registro STOMP con { jugadorId, partidaCodigo } se publica justo antes de suscribirse
+        // en `subscribeToPartida` para asegurar que el servidor reciba el mapping correcto.
         console.log('✅ Conectado al WebSocket');
-
-        // Si tenemos usuario, publicar registro de jugador para reconexión
-        try {
-          const user = authService.getCurrentUser();
-          const jugadorId = user?.userId;
-          if (jugadorId && client && client.active) {
-            const destinoRegistro = '/app/partida/registrar';
-            client.publish({
-              destination: destinoRegistro,
-              body: JSON.stringify({ jugadorId }),
-            });
-            console.log(`📤 Registrando jugadorId en WS: ${jugadorId}`);
-          }
-        } catch (err) {
-          console.warn('⚠️ No se pudo registrar jugador en WS:', err);
-        }
       },
 
       onStompError: (frame) => {
@@ -128,13 +146,9 @@ export class WebSocketService {
 
         if (jugadorIdToRegister && this.client && this.client.active) {
           try {
-            this.client.publish({
-              destination: '/app/partida/registrar',
-              body: JSON.stringify({ jugadorId: jugadorIdToRegister }),
-            });
-            console.log(`📤 Registrando jugadorId en WS (suscripción): ${jugadorIdToRegister}`);
+            await publishRegistrationWithRetry(this.client, codigoPartida, jugadorIdToRegister);
           } catch (e) {
-            console.warn('⚠️ No se pudo publicar registro de jugador en WS (suscripción):', e);
+            console.warn('⚠️ No se pudo publicar registro de jugador en WS (suscripción) tras reintentos:', e);
           }
         }
       }
@@ -144,33 +158,84 @@ export class WebSocketService {
 
     const subscription = this.client!.subscribe(topic, (message: IMessage) => {
       try {
-        if (!message.body) {
-          console.warn('⚠️ Mensaje WebSocket sin body');
+        const raw = message.body;
+        if (!raw || typeof raw !== 'string' || raw.trim().length === 0) {
+          if (process.env.NODE_ENV === 'development') console.warn('⚠️ Mensaje WebSocket vacío o no-string recibido:', raw);
           return;
         }
 
-        const evento: EventoWebSocket = JSON.parse(message.body);
-        
-        // Validar que el evento tiene la estructura correcta
+        // Mostrar el body crudo en dev para diagnosticar frames inesperados
+        if (process.env.NODE_ENV === 'development') {
+          try {
+            console.log('WS raw body snippet:', raw.trim().slice(0, 300));
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        let parsed: any = null;
+        try {
+          parsed = JSON.parse(raw);
+        } catch (parseErr) {
+          console.warn('⚠️ No se pudo parsear body WS como JSON, ignorando frame. Raw:', raw.slice(0, 200));
+          return;
+        }
+
+        const evento: EventoWebSocket = parsed as EventoWebSocket;
+
         if (!evento || typeof evento !== 'object') {
-          console.error('❌ Evento inválido (no es objeto):', evento);
+          console.warn('⚠️ Evento WS parseado no es un objeto, ignorando:', evento);
           return;
         }
 
         if (!evento.tipo) {
-          console.error('❌ Evento sin tipo:', evento);
+          // No hacer crash en Next dev overlay — solo warn y no ejecutar handler.
+          console.warn('⚠️ Evento sin tipo recibido (ignorando):', evento);
           return;
         }
 
         console.log('📨 Evento recibido:', evento.tipo, evento);
         onMessage(evento);
       } catch (error) {
-        console.error('❌ Error parseando mensaje WS:', error, 'Body:', message.body);
+        console.error('❌ Error procesando mensaje WS:', error);
       }
     });
 
     this.subscriptions.set(topic, subscription);
     console.log(`📡 Suscrito a ${topic}`);
+
+    // Después de suscribirnos, publicar registro un par de veces más con retrasos
+    // Esto mitiga ventanas de carrera en las que el servidor podría programar la
+    // desconexión justo antes de procesar el registro inicial.
+    try {
+      if (typeof window !== 'undefined') {
+        const key = `jugadorId_${codigoPartida}`;
+        const persisted = localStorage.getItem(key);
+        const user = authService.getCurrentUser();
+        const jugadorIdToRegister = persisted || user?.userId;
+
+        if (jugadorIdToRegister && this.client && this.client.active) {
+          // intentos adicionales ya separadas (no bloqueantes)
+          (async () => {
+            try {
+              await sleep(400);
+              await publishRegistrationWithRetry(this.client!, codigoPartida, jugadorIdToRegister);
+            } catch (e) {
+              console.warn('⚠️ Re-intento de registro 1 falló:', e);
+            }
+
+            try {
+              await sleep(800);
+              await publishRegistrationWithRetry(this.client!, codigoPartida, jugadorIdToRegister);
+            } catch (e) {
+              console.warn('⚠️ Re-intento de registro 2 falló:', e);
+            }
+          })();
+        }
+      }
+    } catch (err) {
+      console.warn('⚠️ Error al programar re-intentos de registro post-suscripción:', err);
+    }
   }
 
   /**
@@ -259,7 +324,7 @@ export function conectarYSuscribir(
 ): Client {
   const client = crearClienteStomp();
 
-  client.onConnect = () => {
+  client.onConnect = async () => {
     // Publicar registro de jugador para reconexión si tenemos jugadorId (se intenta leer localStorage por partida)
     try {
       const key = `jugadorId_${codigoPartida}`;
@@ -276,11 +341,11 @@ export function conectarYSuscribir(
       }
 
       if (jugadorId && client && client.active) {
-        client.publish({
-          destination: '/app/partida/registrar',
-          body: JSON.stringify({ jugadorId }),
-        });
-        console.log(`📤 Registrando jugadorId en WS (helper): ${jugadorId}`);
+        try {
+          await publishRegistrationWithRetry(client, codigoPartida, jugadorId);
+        } catch (e) {
+          console.warn('⚠️ No se pudo registrar jugador en WS (helper) tras reintentos:', e);
+        }
       }
     } catch (err) {
       console.warn('⚠️ No se pudo registrar jugador en WS (helper):', err);
@@ -288,10 +353,23 @@ export function conectarYSuscribir(
 
     client.subscribe(`/topic/partida/${codigoPartida}`, (msg: IMessage) => {
       try {
-        const body = JSON.parse(msg.body);
-        onMessage(body);
+        const raw = msg.body;
+        if (!raw || typeof raw !== 'string' || raw.trim().length === 0) return;
+        let parsed: any = null;
+        try {
+          parsed = JSON.parse(raw);
+        } catch (e) {
+          console.warn('⚠️ Error parseando mensaje WS (helper):', e, 'Raw:', raw.slice(0,200));
+          return;
+        }
+        // Guardar validación ligera
+        if (!parsed || typeof parsed !== 'object' || !parsed.tipo) {
+          console.warn('⚠️ Mensaje WS (helper) inválido o sin tipo, ignorando:', parsed);
+          return;
+        }
+        onMessage(parsed);
       } catch (e) {
-        console.error('Error parseando mensaje WS', e);
+        console.error('Error procesando mensaje WS (helper):', e);
       }
     });
   };

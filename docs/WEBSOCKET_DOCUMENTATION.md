@@ -443,6 +443,10 @@ Recomendación para el frontend:
 
 - Al recargar la página, reconectar vía REST o enviar el mensaje a `/app/partida/registrar` inmediatamente después de abrir la conexión WS. Esto evitará que el jugador aparezca momentáneamente como desconectado.
 
+Nota técnica:
+- El periodo de gracia es configurable en el backend mediante la propiedad Spring `app.disconnect.graceSeconds` (valor en segundos). Por defecto `5`.
+- El endpoint REST `POST /api/partidas/{codigo}/reconectar` escribe un log informativo con `partida` y `jugadorId` cuando recibe la petición, lo cual facilita debugging desde el frontend.
+
 
 1. **Reconexión automática**: Implementa lógica de reconexión en caso de desconexión inesperada.
 2. **Sincronización de estado**: Usa `SOLICITAR_ESTADO` para sincronizar el cliente después de reconectar.
