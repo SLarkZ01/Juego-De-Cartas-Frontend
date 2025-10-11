@@ -41,6 +41,23 @@ Se ha implementado un sistema completo de WebSocket para habilitar el juego en t
 
 - **PartidaServiceImpl.java** - Actualizado para enviar eventos JugadorUnidoEvent estructurados
 
+### Reconexión y publicación al suscribirse
+
+- Se añadió soporte para reconexión y registro de sesiones:
+   - Registro de sesión STOMP: `PartidaWebSocketController` expone `/app/partida/registrar` para que el cliente informe su `jugadorId` después de conectarse por WebSocket. `WebSocketEventListener` mantiene la asociación sessionId->jugadorId en memoria y marca `jugador.conectado = false` cuando detecta desconexiones.
+   - Endpoint REST de reconexión: `POST /api/partidas/{codigo}/reconectar` permite marcar a un jugador como conectado por su `jugadorId` o mediante el usuario autenticado en el token JWT. Ambas acciones guardan el `Partida` actualizado y publican un `PartidaResponse` a `/topic/partida/{codigo}`.
+
+- Publicación inmediata al suscribirse: `WebSocketEventListener` detecta suscripciones a `/topic/partida/{codigo}` y publica el `PartidaResponse` actual de la partida justo después de registrar la suscripción. Esto evita condiciones de carrera donde un cliente que se suscribe tras un evento pudiera perder ese evento; tras suscribirse el cliente recibirá el estado canónico de la partida.
+
+### Grace period para desconexiones
+
+Se añadió un servicio `DisconnectGraceService` que programa una tarea de 5 segundos antes de marcar a un jugador como desconectado tras una desconexión WebSocket. Si el jugador reconecta (via WS registrar o REST reconectar) dentro del periodo, la tarea se cancela. Esto reduce flicker en el lobby cuando los clientes recargan la página.
+
+Detalles técnicos:
+- `WebSocketEventListener` programa la desconexión diferida al recibir `SessionDisconnectEvent`.
+- `PartidaServiceImpl` cancela tareas pendientes cuando se reconecta por REST.
+- El tiempo por defecto es 5 segundos (configurable en el servicio si se desea).
+
 ### Controladores WebSocket
 
 - **GameWebSocketController.java** - Completamente refactorizado

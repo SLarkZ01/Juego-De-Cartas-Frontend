@@ -99,6 +99,16 @@ export class PartidaService {
   async iniciarPartida(codigo: string): Promise<void> {
     await api.post(`/api/partidas/${codigo}/iniciar`);
   }
+
+  /**
+   * Reconectar a una partida: marca al jugador como conectado en el servidor
+   * Si se pasa jugadorId, se envía en el body; si no, el backend usará el token
+   */
+  async reconectarPartida(codigo: string, jugadorId?: string): Promise<PartidaResponse> {
+    const body = jugadorId ? { jugadorId } : {};
+    const response = await api.post<PartidaResponse>(`/api/partidas/${codigo}/reconectar`, body);
+    return response.data;
+  }
 }
 
 /**

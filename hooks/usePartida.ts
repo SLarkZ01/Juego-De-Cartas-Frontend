@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { partidaService, gameplayService } from '@/services/partida.service';
 import { websocketService } from '@/lib/websocket';
+import { authService } from '@/services/auth.service';
 import type {
   PartidaResponse,
   PartidaDetailResponse,
@@ -33,6 +34,14 @@ export function usePartida(codigoPartida?: string) {
     try {
       const response = await partidaService.crearPartida();
       jugadorIdRef.current = response.jugadorId;
+      // Persistir jugadorId para que la nueva página (lobby) pueda recuperar la identidad
+      try {
+        if (response && response.codigo && response.jugadorId) {
+          localStorage.setItem(`jugadorId_${response.codigo}`, response.jugadorId);
+        }
+      } catch (e) {
+        console.warn('No se pudo guardar jugadorId en localStorage:', e);
+      }
       return response;
     } catch (err: any) {
       const errorMsg = err.message || 'Error al crear partida';
@@ -53,6 +62,14 @@ export function usePartida(codigoPartida?: string) {
     try {
       const response = await partidaService.unirsePartida(codigo);
       jugadorIdRef.current = response.jugadorId;
+      // Persistir jugadorId para que la página de la partida lo recupere al montar
+      try {
+        if (response && response.codigo && response.jugadorId) {
+          localStorage.setItem(`jugadorId_${response.codigo}`, response.jugadorId);
+        }
+      } catch (e) {
+        console.warn('No se pudo guardar jugadorId en localStorage:', e);
+      }
       return response;
     } catch (err: any) {
       const errorMsg = err.message || 'Error al unirse a la partida';
@@ -209,6 +226,44 @@ export function usePartida(codigoPartida?: string) {
    */
   const conectarWebSocket = useCallback(async (codigo: string) => {
     try {
+      // Antes de conectar WS, intentar recuperar jugadorId persistido en localStorage (por si se navegó)
+      try {
+        if (!jugadorIdRef.current) {
+          try {
+            const persisted = localStorage.getItem(`jugadorId_${codigo}`);
+            if (persisted) {
+              jugadorIdRef.current = persisted;
+            }
+          } catch (e) {
+            console.warn('No se pudo leer jugadorId de localStorage:', e);
+          }
+        }
+
+        const savedJugadorId = jugadorIdRef.current;
+        const user = authService.getCurrentUser();
+        const jugadorIdToSend = savedJugadorId || user?.userId;
+
+        if (jugadorIdToSend) {
+          console.log('[usePartida] Intentando reconectar jugador en backend:', jugadorIdToSend);
+          const resp = await partidaService.reconectarPartida(codigo, jugadorIdToSend);
+          // Si el backend devuelve jugadorId, actualizar ref y persistir
+          if (resp?.jugadorId) {
+            jugadorIdRef.current = resp.jugadorId;
+            try {
+              localStorage.setItem(`jugadorId_${codigo}`, resp.jugadorId);
+            } catch (e) {
+              console.warn('No se pudo persistir jugadorId tras reconectar:', e);
+            }
+          }
+          // Actualizar partida local si se devuelve estado
+          if (resp && (resp as any).jugadores) {
+            // Merge básico
+            setPartida((prev) => ({ ...(prev as any), ...(resp as any) } as PartidaDetailResponse));
+          }
+        }
+      } catch (reErr) {
+        console.warn('[usePartida] Reconectar failed (continuando):', reErr);
+      }
       await websocketService.subscribeToPartida(codigo, (evento: EventoWebSocket) => {
         // Validar que el evento existe y tiene tipo
         if (!evento || !evento.tipo) {

@@ -400,7 +400,49 @@ export function useGameWebSocket(partidaCodigo: string, jugadorId: string) {
 }
 ```
 
+
+### Registro STOMP y render del lobby (ejemplo rápido)
+
+Al conectar, envía el registro a `/app/partida/registrar` incluyendo `partidaCodigo` para que el servidor marque `conectado = true` y asocie la sesión:
+
+```javascript
+// después de onConnect
 ## Mejores Prácticas
+  client.publish({
+    destination: '/app/partida/registrar',
+    body: JSON.stringify({ jugadorId, partidaCodigo }),
+    skipContentLengthHeader: true
+  });
+}
+```
+
+Ejemplo simple de render en React del lobby mostrando estado conectado:
+
+```jsx
+function Lobby({ jugadores }) {
+  return (
+    <ul>
+      {jugadores.map(j => (
+        <li key={j.id}>
+          {j.nombre} {j.conectado ? '🟢 Conectado' : '🔴 Desconectado'}
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+### Grace period para desconexiones (5s)
+
+Para evitar flicker en el lobby cuando un usuario recarga la página rápidamente, el servidor ahora aplica un "grace period" de 5 segundos antes de marcar a un jugador como desconectado. Flujo:
+
+- Cuando se detecta una desconexión WebSocket, el servidor programa una tarea que marcará `jugador.conectado = false` pasados 5 segundos.
+- Si el jugador se reconecta (mediante registro STOMP o el endpoint REST de reconexión) dentro de esos 5 segundos, la tarea se cancela y el jugador permanece `conectado = true`.
+
+Recomendación para el frontend:
+
+- Al recargar la página, reconectar vía REST o enviar el mensaje a `/app/partida/registrar` inmediatamente después de abrir la conexión WS. Esto evitará que el jugador aparezca momentáneamente como desconectado.
+
 
 1. **Reconexión automática**: Implementa lógica de reconexión en caso de desconexión inesperada.
 2. **Sincronización de estado**: Usa `SOLICITAR_ESTADO` para sincronizar el cliente después de reconectar.
@@ -408,6 +450,20 @@ export function useGameWebSocket(partidaCodigo: string, jugadorId: string) {
 4. **Optimistic UI**: Actualiza la UI optimistamente y corrige si recibes un evento `ERROR`.
 5. **Heartbeat**: Configura heartbeat en el cliente STOMP para detectar conexiones perdidas.
 
+### Reconexión y registro de sesión (nuevo)
+
+Para evitar que un jugador pierda su plaza al recargar la página, el backend ahora soporta dos mecanismos de reconexión:
+
+- Registro de la sesión WebSocket: al conectar por STOMP el cliente debe enviar su `jugadorId` (si lo conserva) a `/app/partida/registrar`. El servidor guardará la asociación sessionId->jugadorId y, en caso de desconexión, marcará al jugador como desconectado y publicará el estado actualizado de la partida.
+- Endpoint REST de reconexión: si el frontend detecta que la sesión WS se perdió (recarga) puede llamar a `POST /api/partidas/{codigo}/reconectar` para que el servidor marque al jugador como conectado nuevamente. Este endpoint acepta opcionalmente `{ "jugadorId": "..." }` en el body; si no se provee, el backend intentará reconectar usando el usuario autenticado (token JWT).
+
+3) Después de llamar al endpoint REST, volver a abrir la conexión WS y suscribirse a `/topic/partida/{codigo}` — el servidor publicará inmediatamente un `PartidaResponse` actualizado con la bandera `conectado=true` para el jugador.
+
+Nota técnica importante:
+
+- Publicación inmediata al suscribirse: además de publicar eventos cuando un jugador se une o se desconecta, el servidor ahora publica el estado canónico completo de la partida (un `PartidaResponse`) justo después de que detecta una suscripción al topic `/topic/partida/{codigo}`. Esto evita condiciones de carrera donde un cliente que se suscribe justo después de un evento podría perderse ese evento. El cliente puede confiar en que, tras suscribirse, recibirá el estado actual de la partida.
+
+- Registro STOMP vs. Reconexión REST: el registro STOMP (`/app/partida/registrar`) sirve para asociar la sesión WebSocket activa con un `jugadorId` (útil para que el servidor marque desconexiones automáticamente). Si el cliente no puede mantener la sesión (por ejemplo, tras recargar la página), puede usar el endpoint REST de reconexión para que el servidor marque el `jugador.conectado = true` y publique el estado actualizado. Después de eso se recomienda reabrir la conexión WS y suscribirse.
 ## Troubleshooting
 
 ### El cliente no recibe eventos

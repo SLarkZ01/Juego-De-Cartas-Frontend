@@ -335,6 +335,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/Partida'
 
+  /api/partidas/{codigo}/reconectar:
+    post:
+      summary: Reconectar a una partida (marcar jugador como conectado)
+      description: >-
+        Marca al jugador como conectado en la partida especificada. Si se incluye
+        `jugadorId` en el body, se usará para identificar al jugador. Si no se
+        incluye, el servidor intentará identificar al usuario mediante el token JWT
+        del request y reconectará su correspondiente jugador en la partida.
+      tags:
+        - Partidas
+      parameters:
+        - in: path
+          name: codigo
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconectarRequest'
+      responses:
+        '200':
+          description: Jugador reconectado. Devuelve el estado actualizado de la partida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PartidaResponse'
+        '400':
+          description: Partida no encontrada o parámetro inválido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/partidas/{codigo}/seleccionar-atributo:
     post:
       summary: Seleccionar atributo para la ronda
@@ -440,6 +476,11 @@ components:
   schemas:
     RegisterRequest:
       type: object
+      description: Request opcional para reconectar por jugadorId
+      properties:
+        jugadorId:
+          type: string
+          description: ID del jugador (opcional). Si se provee, se reconectará ese jugador.
       properties:
         username:
           type: string

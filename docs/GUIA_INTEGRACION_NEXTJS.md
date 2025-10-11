@@ -713,6 +713,139 @@ export class GameWebSocket {
 }
 ```
 
+### Reconexión y registro de sesión (nuevo)
+
+Para evitar que un jugador pierda su plaza al recargar la página, el backend ahora soporta dos mecanismos de reconexión:
+
+- Registro de la sesión WebSocket: al conectar por STOMP el cliente debe enviar su `jugadorId` (si lo conserva) a `/app/partida/registrar`. El servidor guardará la asociación sessionId->jugadorId y, en caso de desconexión, marcará al jugador como desconectado y publicará el estado actualizado de la partida.
+- Endpoint REST de reconexión: si el frontend detecta que la sesión WS se perdió (recarga) puede llamar a `POST /api/partidas/{codigo}/reconectar` para que el servidor marque al jugador como conectado nuevamente. Este endpoint acepta opcionalmente `{ "jugadorId": "..." }` en el body; si no se provee, el backend intentará reconectar usando el usuario autenticado (token JWT).
+
+Ejemplo de uso (cliente):
+
+1) Al conectar el WebSocket, después de `onConnect` envía el registro del jugador:
+
+```typescript
+// después de client.activate() y onConnect
+const user = authService.getCurrentUser();
+if (user?.userId) {
+  client.publish({
+    destination: '/app/partida/registrar',
+    body: JSON.stringify({ jugadorId: user.userId, partidaCodigo: codigo }),
+    skipContentLengthHeader: true
+  });
+}
+```
+
+2) Si el cliente se recarga y quiere reconectar (por ejemplo en useEffect al montar), llamar al endpoint REST:
+
+```typescript
+// reconectar por jugadorId (si lo tengo guardado en localStorage)
+const reconectar = async (codigo: string) => {
+  const user = authService.getCurrentUser();
+  try {
+    if (user?.userId) {
+      await api.post(`/api/partidas/${codigo}/reconectar`, { jugadorId: user.userId });
+    } else {
+      // si no hay user en el cliente, el endpoint intentará usar el token para identificar
+      await api.post(`/api/partidas/${codigo}/reconectar`);
+    }
+  } catch (err) {
+    console.error('Error reconectando a la partida', err);
+  }
+};
+```
+
+### Ejemplo práctico: hook simple para el lobby
+
+Este hook muestra cómo combinar la llamada REST de reconexión opcional, el registro STOMP y la suscripción al topic. El servidor publicará inmediatamente el `PartidaResponse` al suscribirse, por lo que el hook simplemente actualiza la lista de jugadores cuando llega el payload.
+
+```typescript
+import { useEffect, useRef, useState } from 'react';
+import SockJS from 'sockjs-client';
+import { Client, IMessage } from '@stomp/stompjs';
+import api from '@/lib/axios';
+import { authService } from '@/services/auth.service';
+
+export function useLobby(partidaCodigo: string) {
+  const clientRef = useRef<Client | null>(null);
+  const [jugadores, setJugadores] = useState<any[]>([]);
+
+  useEffect(() => {
+    const user = authService.getCurrentUser();
+    let mounted = true;
+
+    const start = async () => {
+      if (user?.userId) {
+        try {
+          await api.post(`/api/partidas/${partidaCodigo}/reconectar`, { jugadorId: user.userId });
+        } catch (e) {
+          // puede fallar si el jugador no está en la partida; ignorar
+        }
+      }
+
+      const socket = new SockJS(process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:8080/ws');
+      const client = new Client({ webSocketFactory: () => socket });
+
+      client.onConnect = () => {
+        if (!mounted) return;
+        // registrar sesión WS con jugadorId y partidaCodigo
+        if (user?.userId) {
+          client.publish({
+            destination: '/app/partida/registrar',
+            body: JSON.stringify({ jugadorId: user.userId, partidaCodigo }),
+            skipContentLengthHeader: true
+          });
+        }
+
+        client.subscribe(`/topic/partida/${partidaCodigo}`, (msg: IMessage) => {
+          const payload = JSON.parse(msg.body);
+          if (payload && Array.isArray(payload.jugadores)) {
+            setJugadores(payload.jugadores);
+          }
+        });
+      };
+
+      client.activate();
+      clientRef.current = client;
+    };
+
+    start();
+
+    return () => {
+      mounted = false;
+      clientRef.current?.deactivate();
+    };
+  }, [partidaCodigo]);
+
+  return { jugadores };
+}
+```
+
+### Grace period en reconexiones (nuevo)
+
+El backend aplica ahora un grace period de 5 segundos antes de marcar a un jugador como desconectado. Esto reduce el flicker en el lobby cuando el usuario recarga la página.
+
+Qué hace el cliente para aprovecharlo:
+
+1. Al montar la página intenta (opcional) reconectar por REST: POST /api/partidas/{codigo}/reconectar con `{ jugadorId }`.
+2. Abre la conexión WS y publica a `/app/partida/registrar` con `{ jugadorId, partidaCodigo }` lo antes posible en `onConnect`.
+3. Suscríbete a `/topic/partida/{codigo}` — el servidor publicará inmediatamente el `PartidaResponse` y, si la reconexión fue exitosa, `jugador.conectado` permanecerá en `true`.
+
+Si el usuario recarga y vuelve a conectar dentro de los 5 segundos, el servidor cancelará el marcado como desconectado y no verás el estado "desconectado" en el lobby.
+
+
+3) Después de llamar al endpoint REST, volver a abrir la conexión WS y suscribirse a `/topic/partida/{codigo}` — el servidor publicará inmediatamente un `PartidaResponse` actualizado con la bandera `conectado=true` para el jugador.
+
+Notas importantes:
+
+- El backend publica siempre `PartidaResponse` con la lista completa de jugadores en `/topic/partida/{codigo}`; el frontend debe observar `jugadores[].conectado` para mostrar estados de conexión en el lobby.
+- Si quieres mayor robustez (por ejemplo tolerar reinicio del servidor), considera guardar el mapping session->jugador en Redis y recuperar al reactivar la instancia.
+
+Nota importante sobre sincronización de estado:
+
+- Para evitar condiciones de carrera el servidor publica el estado canónico de la partida inmediatamente después de que detecta una nueva suscripción a `/topic/partida/{codigo}`. En la práctica esto significa que, después de reconectar vía REST o reabrir la conexión WS, basta con suscribirse al topic: el servidor enviará el `PartidaResponse` actual y el cliente no debería perder eventos publicados justo antes de la suscripción.
+
+
 ### Hook de React para WebSocket
 
 ```typescript

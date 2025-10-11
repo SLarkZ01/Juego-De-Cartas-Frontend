@@ -39,6 +39,22 @@ export class WebSocketService {
 
       onConnect: () => {
         console.log('✅ Conectado al WebSocket');
+
+        // Si tenemos usuario, publicar registro de jugador para reconexión
+        try {
+          const user = authService.getCurrentUser();
+          const jugadorId = user?.userId;
+          if (jugadorId && client && client.active) {
+            const destinoRegistro = '/app/partida/registrar';
+            client.publish({
+              destination: destinoRegistro,
+              body: JSON.stringify({ jugadorId }),
+            });
+            console.log(`📤 Registrando jugadorId en WS: ${jugadorId}`);
+          }
+        } catch (err) {
+          console.warn('⚠️ No se pudo registrar jugador en WS:', err);
+        }
       },
 
       onStompError: (frame) => {
@@ -100,6 +116,30 @@ export class WebSocketService {
     // Si ya existe una suscripción, desuscribirse primero
     if (this.subscriptions.has(topic)) {
       this.unsubscribeFromPartida(codigoPartida);
+    }
+
+    // Registrar jugadorId en la sesión STOMP antes de suscribirnos, si existe
+    try {
+      if (typeof window !== 'undefined') {
+        const key = `jugadorId_${codigoPartida}`;
+        const persisted = localStorage.getItem(key);
+        const user = authService.getCurrentUser();
+        const jugadorIdToRegister = persisted || user?.userId;
+
+        if (jugadorIdToRegister && this.client && this.client.active) {
+          try {
+            this.client.publish({
+              destination: '/app/partida/registrar',
+              body: JSON.stringify({ jugadorId: jugadorIdToRegister }),
+            });
+            console.log(`📤 Registrando jugadorId en WS (suscripción): ${jugadorIdToRegister}`);
+          } catch (e) {
+            console.warn('⚠️ No se pudo publicar registro de jugador en WS (suscripción):', e);
+          }
+        }
+      }
+    } catch (regErr) {
+      console.warn('⚠️ Error intentando registrar jugador antes de suscripción:', regErr);
     }
 
     const subscription = this.client!.subscribe(topic, (message: IMessage) => {
@@ -220,6 +260,32 @@ export function conectarYSuscribir(
   const client = crearClienteStomp();
 
   client.onConnect = () => {
+    // Publicar registro de jugador para reconexión si tenemos jugadorId (se intenta leer localStorage por partida)
+    try {
+      const key = `jugadorId_${codigoPartida}`;
+      let jugadorId: string | undefined;
+      try {
+        jugadorId = typeof window !== 'undefined' ? localStorage.getItem(key) || undefined : undefined;
+      } catch (e) {
+        console.warn('No se pudo leer jugadorId de localStorage (helper):', e);
+      }
+
+      if (!jugadorId) {
+        const user = authService.getCurrentUser();
+        jugadorId = user?.userId;
+      }
+
+      if (jugadorId && client && client.active) {
+        client.publish({
+          destination: '/app/partida/registrar',
+          body: JSON.stringify({ jugadorId }),
+        });
+        console.log(`📤 Registrando jugadorId en WS (helper): ${jugadorId}`);
+      }
+    } catch (err) {
+      console.warn('⚠️ No se pudo registrar jugador en WS (helper):', err);
+    }
+
     client.subscribe(`/topic/partida/${codigoPartida}`, (msg: IMessage) => {
       try {
         const body = JSON.parse(msg.body);
