@@ -18,10 +18,10 @@ export interface JugadorDTO {
 export interface PartidaResponseWS {
   codigo: string;
   jugadorId?: string | null;
-  jugadores: JugadorDTO[];
+  jugadores: JugadorDTO[] | null;
+  eliminada?: boolean;
 }
-
-export function useLobbyRealTime(partidaCodigo: string | null, jugadorId?: string | null) {
+export function useLobbyRealTime(partidaCodigo: string | null, jugadorId?: string | null, onPartidaEliminada?: () => void) {
   const clientRef = useRef<Client | null>(null);
   const [jugadores, setJugadores] = useState<JugadorDTO[]>([]);
   const [connected, setConnected] = useState(false);
@@ -77,6 +77,15 @@ export function useLobbyRealTime(partidaCodigo: string | null, jugadorId?: strin
             try {
               const payload = JSON.parse(msg.body);
               console.log('[useLobbyRealTime] Mensaje recibido:', payload);
+              // Handle partida eliminada (nuevo campo enviado por backend)
+              if (payload && (payload.eliminada === true || payload.jugadores == null)) {
+                console.warn('[useLobbyRealTime] Partida marcada como eliminada en WS payload');
+                // limpiar lista local y avisar al consumidor
+                setJugadores([]);
+                setLoading(false);
+                if (onPartidaEliminada) onPartidaEliminada();
+                return;
+              }
 
               // El servidor envía un PartidaResponse con { codigo, jugadorId, jugadores }
               if (payload && Array.isArray(payload.jugadores)) {

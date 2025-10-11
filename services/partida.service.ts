@@ -109,6 +109,13 @@ export class PartidaService {
     const response = await api.post<PartidaResponse>(`/api/partidas/${codigo}/reconectar`, body);
     return response.data;
   }
+
+  /**
+   * Salir de la partida (lobby) — el backend eliminará al jugador y publicará la partida actualizada
+   */
+  async salirPartida(codigo: string): Promise<void> {
+    await api.post(`/api/partidas/${codigo}/salir`);
+  }
 }
 
 /**

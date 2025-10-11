@@ -7,13 +7,15 @@ import { useLobbyRealTime } from '@/hooks/useLobbyRealTime';
 import { usePartida } from '@/hooks/usePartida';
 import { Button } from '@/components/ui/button';
 import CartaComponent from '@/components/game/CartaComponent';
-import { cartaService } from '@/services/partida.service';
+import { cartaService, partidaService } from '@/services/partida.service';
 import type { Carta } from '@/types/api';
 import Image from 'next/image';
 import LobbyHeader from '@/components/lobby/LobbyHeader';
 import PlayersList from '@/components/lobby/PlayersList';
 import LobbyInfo from '@/components/lobby/LobbyInfo';
 import EventsList from '@/components/lobby/EventsList';
+import Modal from '@/components/ui/Modal';
+import Toast from '@/components/ui/Toast';
 
 export default function PartidaPage() {
   const params = useParams();
@@ -37,8 +39,25 @@ export default function PartidaPage() {
     setJugadorId,
   } = usePartida(codigo);
   
-  // Hook específico para el lobby en tiempo real
-  const { jugadores: jugadoresLobby, connected: lobbyConnected, loading: lobbyLoading } = useLobbyRealTime(codigo, jugadorId);
+  // Handler cuando el backend notifica que la partida fue eliminada (creador salió)
+  const handlePartidaEliminada = () => {
+    try {
+      // limpiar almacenamiento local
+      localStorage.removeItem(`jugadorId_${codigo}`);
+    } catch (e) {
+      console.warn('No se pudo eliminar jugadorId de localStorage tras eliminación de partida:', e);
+    }
+
+    // Mostrar modal bonito a los jugadores restantes y luego redirigir
+    setShowCancelledModal(true);
+    setTimeout(() => {
+      setShowCancelledModal(false);
+      router.push('/jugar');
+    }, 2200);
+  };
+
+  // Hook específico para el lobby en tiempo real (ahora con callback para partida eliminada)
+  const { jugadores: jugadoresLobby, connected: lobbyConnected, loading: lobbyLoading } = useLobbyRealTime(codigo, jugadorId, handlePartidaEliminada);
 
   // Debounce visual del estado conectado para evitar flicker corto
   const [visualConectado, setVisualConectado] = useState<boolean>(conectado);
@@ -59,6 +78,9 @@ export default function PartidaPage() {
 
   const [cartasDisponibles, setCartasDisponibles] = useState<Carta[]>([]);
   const [mensajeEvento, setMensajeEvento] = useState<string>('');
+  const [showConfirmSalir, setShowConfirmSalir] = useState(false);
+  const [showCancelledModal, setShowCancelledModal] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string>('');
 
   useEffect(() => {
     // esperar a que el contexto de auth haya cargado antes de redirigir
@@ -233,6 +255,27 @@ export default function PartidaPage() {
     ? cartasDisponibles.find(c => c.codigo === miJugador.cartaActual)
     : null;
 
+  // Handler para mostrar confirmación de salida
+  const handleSalir = () => setShowConfirmSalir(true);
+
+  const confirmSalir = async () => {
+    setShowConfirmSalir(false);
+    if (!codigo) return;
+
+    try {
+      await partidaService.salirPartida(codigo);
+      try { localStorage.removeItem(`jugadorId_${codigo}`); } catch (e) { /* ignore */ }
+
+      setToastMessage('Has salido de la partida. Volviendo al listado...');
+      setTimeout(() => router.push('/jugar'), 1200);
+    } catch (err: any) {
+      console.error('Error saliendo de la partida:', err);
+      setToastMessage(err?.message || 'Error al salir de la partida');
+    }
+  };
+
+  const cancelSalir = () => setShowConfirmSalir(false);
+
   // Log para diagnóstico
   if (process.env.NODE_ENV === 'development') {
     console.log('[PartidaPage] Estado actual:', {
@@ -249,7 +292,7 @@ export default function PartidaPage() {
       <Image src="/images/fondo.webp" alt="Fondo" fill className="object-cover opacity-30" priority />
 
       <div className="relative z-10 min-h-screen p-4">
-        <LobbyHeader codigo={codigo} estado={partida.estado} visualConectado={visualConectado} onSalir={() => router.push('/jugar')} />
+  <LobbyHeader codigo={codigo} estado={partida.estado} visualConectado={visualConectado} onSalir={handleSalir} />
 
         {mensajeEvento && (
           <div className="max-w-7xl mx-auto mt-0">
@@ -258,6 +301,21 @@ export default function PartidaPage() {
             </div>
           </div>
         )}
+
+        {/* Modales / toasts */}
+        <Modal open={showConfirmSalir} title="Confirmar salida" onClose={cancelSalir}>
+          <p className="mb-4">¿Seguro que quieres salir de la partida?</p>
+          <div className="flex gap-2 justify-end">
+            <Button variant="ghost" className="bg-white/10 text-white hover:bg-white/20" onClick={cancelSalir}>Cancelar</Button>
+            <Button variant="destructive" onClick={confirmSalir}>Salir</Button>
+          </div>
+        </Modal>
+
+        <Modal open={showCancelledModal} title="Partida cancelada" onClose={() => setShowCancelledModal(false)}>
+          <p>La partida ha sido cancelada por el creador. Serás redirigido al listado de partidas.</p>
+        </Modal>
+
+        <Toast message={toastMessage} open={!!toastMessage} onClose={() => setToastMessage('')} />
 
         <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
