@@ -1,19 +1,82 @@
 openapi: 3.0.3
 info:
   title: Juego De Cartas API
-  version: 1.0.0
+  version: 2.0.0
   description: >-
-    API REST para el backend de "Juego De Cartas" (Card Match Battle).
+    API REST para el backend de "Juego De Cartas" (Card Match Battle) con autenticación JWT.
     Especificación alineada con los controladores actuales en `src/main/java/.../controller/rest`.
 servers:
   - url: http://localhost:8080
     description: Development server
 
+security:
+  - BearerAuth: []
+
 paths:
+  /auth/register:
+    post:
+      summary: Registrar nuevo usuario
+      description: >-
+        Registra un nuevo usuario con username, email y password.
+        El username se usará como identificador en las partidas.
+      tags:
+        - Authentication
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '200':
+          description: Usuario registrado exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Error de validación o usuario ya existe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/login:
+    post:
+      summary: Iniciar sesión
+      description: >-
+        Inicia sesión con username o email y password.
+        Puedes usar indistintamente el username o el email para iniciar sesión.
+      tags:
+        - Authentication
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login exitoso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Credenciales inválidas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/cartas:
     get:
       summary: Listar cartas
       description: Lista todas las cartas. Puede filtrarse por temática con el query parameter `tematica`.
+      tags:
+        - Cartas
       parameters:
         - in: query
           name: tematica
@@ -33,6 +96,8 @@ paths:
   /api/cartas/{codigo}:
     get:
       summary: Obtener carta por código
+      tags:
+        - Cartas
       parameters:
         - in: path
           name: codigo
@@ -56,6 +121,8 @@ paths:
   /api/cartas/sincronizar:
     post:
       summary: Sincronizar cartas desde API externa
+      tags:
+        - Cartas
       responses:
         '200':
           description: Cartas sincronizadas
@@ -69,6 +136,12 @@ paths:
   /api/partidas/crear:
     post:
       summary: Crear partida
+      description: >-
+        Crea una nueva partida. El usuario autenticado se convierte en el jugador 1 (creador).
+        El nombre del jugador mostrado es el username del usuario (único e identificable).
+        Se requieren mínimo 2 jugadores para iniciar la partida.
+      tags:
+        - Partidas
       requestBody:
         required: true
         content:
@@ -83,9 +156,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/PartidaResponse'
 
+  /auth/logout:
+    post:
+      summary: Cerrar sesión (logout)
+      description: >-
+        Endpoint para indicar al servidor que el cliente realiza un logout.
+        En este sistema stateless con JWT no se realiza invalidación automática del token
+        salvo que se implemente un mecanismo de revocación (blacklist). El frontend debe
+        eliminar el token localmente tras recibir 200 OK.
+      tags:
+        - Authentication
+      requestBody:
+        required: false
+        content:
+          application/json: {}
+      responses:
+        '200':
+          description: Logout aceptado. El cliente debe limpiar credenciales locales.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                example:
+                  message: "Logout exitoso"
+
   /api/partidas/{codigo}/unirse:
     post:
       summary: Unirse a partida existente
+      description: >-
+        Une al usuario autenticado a una partida existente.
+        El nombre del jugador mostrado es el username del usuario (único e identificable).
+        La partida se inicia automáticamente cuando se une el 7mo jugador (máximo).
+      tags:
+        - Partidas
       parameters:
         - in: path
           name: codigo
@@ -109,6 +215,8 @@ paths:
   /api/partidas/{codigo}:
     get:
       summary: Obtener información básica de la partida
+      tags:
+        - Partidas
       parameters:
         - in: path
           name: codigo
@@ -130,6 +238,8 @@ paths:
         Devuelve la vista de la partida desde la perspectiva de `jugadorId`.
         Incluye `miJugador` con las cartas en mano del jugador solicitado y `jugadores`
         con la información pública del resto.
+      tags:
+        - Partidas
       parameters:
         - in: path
           name: codigo
@@ -208,6 +318,9 @@ paths:
   /api/partidas/{codigo}/iniciar:
     post:
       summary: Iniciar partida
+      description: Inicia la partida. Requiere mínimo 2 jugadores.
+      tags:
+        - Partidas
       parameters:
         - in: path
           name: codigo
@@ -225,6 +338,8 @@ paths:
   /api/partidas/{codigo}/seleccionar-atributo:
     post:
       summary: Seleccionar atributo para la ronda
+      tags:
+        - Gameplay
       parameters:
         - in: path
           name: codigo
@@ -244,6 +359,8 @@ paths:
   /api/partidas/{codigo}/jugar:
     post:
       summary: Jugar carta en la ronda actual
+      tags:
+        - Gameplay
       parameters:
         - in: path
           name: codigo
@@ -263,6 +380,8 @@ paths:
   /api/partidas/{codigo}/transformaciones/activar:
     post:
       summary: Activar transformación
+      tags:
+        - Transformaciones
       parameters:
         - in: path
           name: codigo
@@ -286,6 +405,8 @@ paths:
   /api/partidas/{codigo}/transformaciones/desactivar:
     post:
       summary: Desactivar transformación
+      tags:
+        - Transformaciones
       parameters:
         - in: path
           name: codigo
@@ -307,7 +428,61 @@ paths:
                 $ref: '#/components/schemas/TransformacionResponse'
 
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        JWT token obtenido tras login o registro.
+        Formato: `Authorization: Bearer <token>`
+
   schemas:
+    RegisterRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 20
+          description: Nombre de usuario único (se usará como identificador en las partidas)
+        email:
+          type: string
+          format: email
+          description: Email único del usuario
+        password:
+          type: string
+          minLength: 6
+          description: Contraseña (mínimo 6 caracteres)
+      required: [username, email, password]
+
+    LoginRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          description: Nombre de usuario o email para iniciar sesión
+        password:
+          type: string
+          description: Contraseña del usuario
+      required: [username, password]
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT token para autenticación
+        userId:
+          type: string
+          description: ID del usuario
+        username:
+          type: string
+          description: Nombre de usuario (usado como identificador en partidas)
+        email:
+          type: string
+          description: Email del usuario
+
     Carta:
       type: object
       properties:
@@ -360,17 +535,15 @@ components:
 
     CrearPartidaRequest:
       type: object
-      properties:
-        nombreJugador:
-          type: string
-      required: [nombreJugador]
+      description: >-
+        No requiere parámetros. El nombre del jugador se obtiene del usuario autenticado.
+      properties: {}
 
     UnirsePartidaRequest:
       type: object
-      properties:
-        nombreJugador:
-          type: string
-      required: [nombreJugador]
+      description: >-
+        No requiere parámetros. El nombre del jugador se obtiene del usuario autenticado.
+      properties: {}
 
     SeleccionarAtributoRequest:
       type: object

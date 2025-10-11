@@ -1,0 +1,1184 @@
+# Guía de Integración Backend con Next.js
+
+Esta guía detalla cómo integrar el backend del Juego de Cartas con una aplicación Next.js.
+
+## 📋 Tabla de Contenidos
+
+- [Configuración Inicial](#configuración-inicial)
+- [Sistema de Autenticación](#sistema-de-autenticación)
+- [Gestión de Partidas](#gestión-de-partidas)
+- [WebSockets para Juego en Tiempo Real](#websockets-para-juego-en-tiempo-real)
+- [Manejo de Errores](#manejo-de-errores)
+- [Ejemplos Completos](#ejemplos-completos)
+
+---
+
+## 🚀 Configuración Inicial
+
+### 1. Variables de Entorno
+
+Crea un archivo `.env.local` en tu proyecto Next.js:
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost:8080
+NEXT_PUBLIC_WS_URL=ws://localhost:8080/ws
+```
+
+### 2. Instalación de Dependencias
+
+```bash
+npm install axios @stomp/stompjs sockjs-client
+```
+
+### 3. Configuración de Axios
+
+Crea `lib/axios.ts`:
+
+```typescript
+import axios from 'axios';
+
+const api = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_API_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  withCredentials: true,  // ✅ IMPORTANTE: Necesario para CORS con autenticación
+});
+
+// Interceptor para añadir el token en cada petición
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Interceptor para manejar errores de autenticación
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Token expirado o inválido
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
+  }
+);
+
+export default api;
+```
+
+---
+
+## 🔐 Sistema de Autenticación
+
+### Registro de Usuario
+
+#### Endpoint
+```
+POST /auth/register
+```
+
+#### Request Body
+```typescript
+interface RegisterRequest {
+  username: string;  // 3-20 caracteres, único
+  email: string;     // Formato email válido, único
+  password: string;  // Mínimo 6 caracteres
+}
+```
+
+#### Response
+```typescript
+interface AuthResponse {
+  token: string;      // JWT token
+  userId: string;     // ID del usuario en MongoDB
+  username: string;   // Username (usado en partidas)
+  email: string;      // Email del usuario
+}
+```
+
+#### Ejemplo de Implementación
+
+```typescript
+// services/auth.service.ts
+import api from '@/lib/axios';
+
+export interface RegisterData {
+  username: string;
+  email: string;
+  password: string;
+}
+
+export interface LoginData {
+  username: string;  // Puede ser username o email
+  password: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  userId: string;
+  username: string;
+  email: string;
+}
+
+export const authService = {
+  // Registro de nuevo usuario
+  register: async (data: RegisterData): Promise<AuthResponse> => {
+    const response = await api.post<AuthResponse>('/auth/register', data);
+    
+    // Guardar token y datos de usuario
+    localStorage.setItem('token', response.data.token);
+    localStorage.setItem('user', JSON.stringify(response.data));
+    
+    return response.data;
+  },
+
+  // Login (acepta username o email)
+  login: async (data: LoginData): Promise<AuthResponse> => {
+    const response = await api.post<AuthResponse>('/auth/login', data);
+    
+    // Guardar token y datos de usuario
+    localStorage.setItem('token', response.data.token);
+    localStorage.setItem('user', JSON.stringify(response.data));
+    
+    return response.data;
+  },
+
+  // Logout
+  // Logout: llama al endpoint backend y limpia el estado local.
+  // El backend devuelve 200 OK (stateless JWT); la invalidación real
+  // requiere una blacklist si se desea revocar tokens antes de expirar.
+  logout: async (): Promise<void> => {
+    try {
+      await api.post('/auth/logout');
+    } catch (e) {
+      // Ignorar errores de red/servidor aquí; igual limpiamos el cliente
+      console.warn('Logout request failed, clearing local state anyway.');
+    }
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+  },
+
+  // Obtener usuario actual
+  getCurrentUser: (): AuthResponse | null => {
+    const userStr = localStorage.getItem('user');
+    return userStr ? JSON.parse(userStr) : null;
+  },
+
+  // Verificar si está autenticado
+  isAuthenticated: (): boolean => {
+    return !!localStorage.getItem('token');
+  },
+};
+```
+
+#### Componente de Registro
+
+```typescript
+// components/RegisterForm.tsx
+'use client';
+
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { authService } from '@/services/auth.service';
+
+export default function RegisterForm() {
+  const router = useRouter();
+  const [formData, setFormData] = useState({
+    username: '',
+    email: '',
+    password: '',
+  });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      await authService.register(formData);
+      router.push('/dashboard'); // Redirigir al dashboard
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Error al registrarse');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div>
+        <label htmlFor="username">Username</label>
+        <input
+          id="username"
+          type="text"
+          value={formData.username}
+          onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+          required
+          minLength={3}
+          maxLength={20}
+          className="w-full p-2 border rounded"
+        />
+      </div>
+
+      <div>
+        <label htmlFor="email">Email</label>
+        <input
+          id="email"
+          type="email"
+          value={formData.email}
+          onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+          required
+          className="w-full p-2 border rounded"
+        />
+      </div>
+
+      <div>
+        <label htmlFor="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          value={formData.password}
+          onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+          required
+          minLength={6}
+          className="w-full p-2 border rounded"
+        />
+      </div>
+
+      {error && <p className="text-red-500">{error}</p>}
+
+      <button
+        type="submit"
+        disabled={loading}
+        className="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
+      >
+        {loading ? 'Registrando...' : 'Registrarse'}
+      </button>
+    </form>
+  );
+}
+```
+
+#### Componente de Login
+
+```typescript
+// components/LoginForm.tsx
+'use client';
+
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { authService } from '@/services/auth.service';
+
+export default function LoginForm() {
+  const router = useRouter();
+  const [formData, setFormData] = useState({
+    username: '', // Puede ser username o email
+    password: '',
+  });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      await authService.login(formData);
+      router.push('/dashboard');
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Credenciales inválidas');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div>
+        <label htmlFor="username">Username o Email</label>
+        <input
+          id="username"
+          type="text"
+          value={formData.username}
+          onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+          required
+          placeholder="username o email@ejemplo.com"
+          className="w-full p-2 border rounded"
+        />
+      </div>
+
+      <div>
+        <label htmlFor="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          value={formData.password}
+          onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+          required
+          className="w-full p-2 border rounded"
+        />
+      </div>
+
+      {error && <p className="text-red-500">{error}</p>}
+
+      <button
+        type="submit"
+        disabled={loading}
+        className="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
+      >
+        {loading ? 'Iniciando sesión...' : 'Iniciar Sesión'}
+      </button>
+    </form>
+  );
+}
+```
+
+### Protección de Rutas
+
+```typescript
+// middleware.ts
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
+
+export function middleware(request: NextRequest) {
+  const token = request.cookies.get('token')?.value;
+  const isAuthPage = request.nextUrl.pathname.startsWith('/login') || 
+                     request.nextUrl.pathname.startsWith('/register');
+
+  if (!token && !isAuthPage) {
+    return NextResponse.redirect(new URL('/login', request.url));
+  }
+
+  if (token && isAuthPage) {
+    return NextResponse.redirect(new URL('/dashboard', request.url));
+  }
+
+  return NextResponse.next();
+}
+
+export const config = {
+  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],
+};
+```
+
+---
+
+## 🎮 Gestión de Partidas
+
+### Tipos TypeScript
+
+```typescript
+// types/game.types.ts
+
+export interface Jugador {
+  userId: string;
+  nombre: string;      // Username del usuario
+  orden: number;       // 1-7
+  ki: number;
+  transformacionActual: string | null;
+  cartasEnMano: Carta[];
+  mazo: string[];
+  descarte: string[];
+}
+
+export interface Partida {
+  id: string;
+  codigo: string;      // Código de 6 dígitos
+  estado: 'ESPERANDO' | 'EN_CURSO' | 'FINALIZADA';
+  jugadores: Jugador[];
+  turnoActual: number;
+  direccion: 'HORARIO' | 'ANTIHORARIO';
+  fechaCreacion: string;
+  creadorId: string;
+}
+
+export interface Carta {
+  id: string;
+  codigo: string;
+  nombre: string;
+  imagenUrl: string;
+  atributos: Record<string, any>;
+}
+```
+
+### Servicio de Partidas
+
+```typescript
+// services/game.service.ts
+import api from '@/lib/axios';
+import { Partida } from '@/types/game.types';
+
+export const gameService = {
+  // Crear nueva partida
+  crearPartida: async (): Promise<Partida> => {
+    const response = await api.post<Partida>('/api/partidas/crear');
+    return response.data;
+  },
+
+  // Unirse a partida por código
+  unirsePartida: async (codigo: string): Promise<Partida> => {
+    const response = await api.post<Partida>(`/api/partidas/${codigo}/unirse`);
+    return response.data;
+  },
+
+  // Obtener partida actual del usuario
+  getPartidaActual: async (): Promise<Partida> => {
+    const response = await api.get<Partida>('/api/partidas/actual');
+    return response.data;
+  },
+
+  // Salir de partida
+  salirPartida: async (partidaId: string): Promise<void> => {
+    await api.post(`/api/partidas/${partidaId}/salir`);
+  },
+
+  // Iniciar partida manualmente (si aún no ha empezado)
+  iniciarPartida: async (partidaId: string): Promise<Partida> => {
+    const response = await api.post<Partida>(`/api/partidas/${partidaId}/iniciar`);
+    return response.data;
+  },
+};
+```
+
+### Componente para Crear Partida
+
+```typescript
+// components/CreateGame.tsx
+'use client';
+
+import { useState } from 'react';
+import { gameService } from '@/services/game.service';
+import { Partida } from '@/types/game.types';
+
+export default function CreateGame() {
+  const [partida, setPartida] = useState<Partida | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleCreateGame = async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const nuevaPartida = await gameService.crearPartida();
+      setPartida(nuevaPartida);
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Error al crear partida');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="p-4">
+      <button
+        onClick={handleCreateGame}
+        disabled={loading}
+        className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 disabled:bg-gray-400"
+      >
+        {loading ? 'Creando...' : 'Crear Nueva Partida'}
+      </button>
+
+      {error && <p className="text-red-500 mt-2">{error}</p>}
+
+      {partida && (
+        <div className="mt-4 p-4 border rounded bg-white shadow">
+          <h3 className="text-xl font-bold">¡Partida Creada!</h3>
+          <p className="text-2xl font-mono my-2">Código: {partida.codigo}</p>
+          <p className="text-sm text-gray-600">
+            Comparte este código con otros jugadores
+          </p>
+          <p className="mt-2">
+            Jugadores: {partida.jugadores.length}/7
+          </p>
+          <ul className="mt-2">
+            {partida.jugadores.map((jugador) => (
+              <li key={jugador.userId}>
+                {jugador.orden}. {jugador.nombre}
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-gray-500 mt-2">
+            La partida iniciará automáticamente cuando se una el 7º jugador
+            o cuando el creador la inicie manualmente (mínimo 2 jugadores).
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### Componente para Unirse a Partida
+
+```typescript
+// components/JoinGame.tsx
+'use client';
+
+import { useState } from 'react';
+import { gameService } from '@/services/game.service';
+
+export default function JoinGame() {
+  const [codigo, setCodigo] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
+
+  const handleJoinGame = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    setSuccess(false);
+
+    try {
+      await gameService.unirsePartida(codigo);
+      setSuccess(true);
+      setCodigo('');
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Error al unirse a la partida');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleJoinGame} className="space-y-4">
+      <div>
+        <label htmlFor="codigo" className="block mb-2">
+          Código de Partida
+        </label>
+        <input
+          id="codigo"
+          type="text"
+          value={codigo}
+          onChange={(e) => setCodigo(e.target.value.toUpperCase())}
+          placeholder="Ej: ABC123"
+          maxLength={6}
+          required
+          className="w-full p-2 border rounded font-mono text-center text-xl"
+        />
+      </div>
+
+      {error && <p className="text-red-500">{error}</p>}
+      {success && <p className="text-green-500">¡Te has unido a la partida!</p>}
+
+      <button
+        type="submit"
+        disabled={loading || codigo.length !== 6}
+        className="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
+      >
+        {loading ? 'Uniéndose...' : 'Unirse a Partida'}
+      </button>
+    </form>
+  );
+}
+```
+
+---
+
+## 🔌 WebSockets para Juego en Tiempo Real
+
+### Configuración de WebSocket Client
+
+```typescript
+// lib/websocket.ts
+import { Client } from '@stomp/stompjs';
+import SockJS from 'sockjs-client';
+
+export class GameWebSocket {
+  private client: Client;
+  private partidaId: string;
+  private connected: boolean = false;
+
+  constructor(partidaId: string, token: string) {
+    this.partidaId = partidaId;
+
+    this.client = new Client({
+      webSocketFactory: () => new SockJS(process.env.NEXT_PUBLIC_WS_URL!),
+      connectHeaders: {
+        Authorization: `Bearer ${token}`,
+      },
+      debug: (str) => {
+        console.log('STOMP:', str);
+      },
+      reconnectDelay: 5000,
+      heartbeatIncoming: 4000,
+      heartbeatOutgoing: 4000,
+    });
+  }
+
+  connect(callbacks: {
+    onConnect?: () => void;
+    onPartidaUpdate?: (partida: any) => void;
+    onEventoJuego?: (evento: any) => void;
+    onError?: (error: any) => void;
+  }) {
+    this.client.onConnect = () => {
+      console.log('WebSocket conectado');
+      this.connected = true;
+
+      // Suscribirse a actualizaciones de la partida
+      // Nota: el backend ahora publica un objeto `PartidaResponse` completo
+      // (ej: { codigo, jugadorId, jugadores: [...] }) en /topic/partida/{codigo}.
+      // También puede publicar mensajes más detallados (PartidaDetailResponse)
+      // dependiendo del evento. Aquí parseamos el payload y lo reenviamos
+      // al hook mediante `onPartidaUpdate`.
+      this.client.subscribe(`/topic/partida/${this.partidaId}`, (message) => {
+        const payload = JSON.parse(message.body);
+        // payload puede ser PartidaResponse o PartidaDetailResponse
+        callbacks.onPartidaUpdate?.(payload);
+      });
+
+      // Suscribirse a eventos de juego específicos (opcional)
+      this.client.subscribe(`/topic/partida/${this.partidaId}/eventos`, (message) => {
+        const evento = JSON.parse(message.body);
+        callbacks.onEventoJuego?.(evento);
+      });
+
+      callbacks.onConnect?.();
+    };
+
+    this.client.onStompError = (frame) => {
+      console.error('Error STOMP:', frame);
+      callbacks.onError?.(frame);
+    };
+
+    this.client.activate();
+  }
+
+  // Jugar carta
+  jugarCarta(cartaId: string, targetJugadorId?: string) {
+    if (!this.connected) {
+      throw new Error('WebSocket no conectado');
+    }
+
+    this.client.publish({
+      destination: `/app/partida/${this.partidaId}/jugar`,
+      body: JSON.stringify({
+        cartaId,
+        targetJugadorId,
+      }),
+    });
+  }
+
+  // Robar carta
+  robarCarta() {
+    if (!this.connected) {
+      throw new Error('WebSocket no conectado');
+    }
+
+    this.client.publish({
+      destination: `/app/partida/${this.partidaId}/robar`,
+      body: JSON.stringify({}),
+    });
+  }
+
+  // Usar transformación
+  usarTransformacion(transformacionCodigo: string) {
+    if (!this.connected) {
+      throw new Error('WebSocket no conectado');
+    }
+
+    this.client.publish({
+      destination: `/app/partida/${this.partidaId}/transformar`,
+      body: JSON.stringify({
+        transformacionCodigo,
+      }),
+    });
+  }
+
+  disconnect() {
+    if (this.client) {
+      this.client.deactivate();
+      this.connected = false;
+    }
+  }
+
+  isConnected(): boolean {
+    return this.connected;
+  }
+}
+```
+
+### Hook de React para WebSocket
+
+```typescript
+// hooks/useGameWebSocket.ts
+import { useEffect, useState, useCallback } from 'react';
+import { GameWebSocket } from '@/lib/websocket';
+import { Partida } from '@/types/game.types';
+import { authService } from '@/services/auth.service';
+
+export function useGameWebSocket(partidaId: string | null) {
+  const [ws, setWs] = useState<GameWebSocket | null>(null);
+  const [partida, setPartida] = useState<Partida | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [eventos, setEventos] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!partidaId) return;
+
+    const user = authService.getCurrentUser();
+    if (!user?.token) return;
+
+    const websocket = new GameWebSocket(partidaId, user.token);
+
+    websocket.connect({
+      onConnect: () => {
+        console.log('WebSocket conectado a partida:', partidaId);
+        setConnected(true);
+      },
+      onPartidaUpdate: (updatedPartida) => {
+        console.log('Actualización de partida (payload):', updatedPartida);
+        // El backend publica ahora un PartidaResponse completo.
+        // Si recibimos ese objeto, actualizamos el estado `partida` con él.
+        if (updatedPartida && Array.isArray(updatedPartida.jugadores)) {
+          setPartida(updatedPartida as unknown as Partida);
+        } else if (updatedPartida && updatedPartida.partida) {
+          // En algunos casos el payload puede estar anidado
+          setPartida(updatedPartida.partida as Partida);
+        } else {
+          // Fallback: asignar directamente
+          setPartida(updatedPartida as unknown as Partida);
+        }
+      },
+      onEventoJuego: (evento) => {
+        console.log('Evento de juego:', evento);
+        setEventos((prev) => [...prev, evento]);
+      },
+      onError: (error) => {
+        console.error('Error WebSocket:', error);
+        setConnected(false);
+      },
+    });
+
+    setWs(websocket);
+
+    return () => {
+      websocket.disconnect();
+    };
+  }, [partidaId]);
+
+  const jugarCarta = useCallback(
+    (cartaId: string, targetJugadorId?: string) => {
+      ws?.jugarCarta(cartaId, targetJugadorId);
+    },
+    [ws]
+  );
+
+  const robarCarta = useCallback(() => {
+    ws?.robarCarta();
+  }, [ws]);
+
+  const usarTransformacion = useCallback(
+    (transformacionCodigo: string) => {
+      ws?.usarTransformacion(transformacionCodigo);
+    },
+    [ws]
+  );
+
+  return {
+    partida,
+    connected,
+    eventos,
+    jugarCarta,
+    robarCarta,
+    usarTransformacion,
+  };
+}
+```
+
+### Componente de Juego en Tiempo Real
+
+```typescript
+// components/GameBoard.tsx
+'use client';
+
+import { useGameWebSocket } from '@/hooks/useGameWebSocket';
+import { authService } from '@/services/auth.service';
+
+interface GameBoardProps {
+  partidaId: string;
+}
+
+export default function GameBoard({ partidaId }: GameBoardProps) {
+  const { partida, connected, jugarCarta, robarCarta, usarTransformacion } = 
+    useGameWebSocket(partidaId);
+  const user = authService.getCurrentUser();
+
+  if (!connected) {
+    return <div>Conectando al juego...</div>;
+  }
+
+  if (!partida) {
+    return <div>Cargando partida...</div>;
+  }
+
+  const jugadores = partida.jugadores || [];
+  const jugadorActual = jugadores.find(j => j.userId === user?.userId);
+  const turnoIndex = typeof partida.turnoActual === 'number' ? partida.turnoActual : Number(partida.turnoActual || 0);
+  const esMiTurno = jugadores[turnoIndex] ? jugadores[turnoIndex].userId === user?.userId : false;
+
+  return (
+    <div className="game-board p-4">
+      <div className="game-info bg-gray-100 p-4 rounded mb-4">
+        <h2 className="text-2xl font-bold">Partida: {partida.codigo}</h2>
+        <p>Estado: {partida.estado}</p>
+        <p>Turno: Jugador {partida.turnoActual + 1}</p>
+        <p>Dirección: {partida.direccion}</p>
+        {esMiTurno && (
+          <p className="text-green-600 font-bold">¡Es tu turno!</p>
+        )}
+      </div>
+
+      {/* Jugadores */}
+      <div className="players grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        {jugadores.map((jugador, index) => (
+          <div
+            key={jugador.userId}
+            className={`player-card p-4 rounded ${
+              index === partida.turnoActual ? 'bg-yellow-100 border-2 border-yellow-500' : 'bg-white border'
+            } ${jugador.userId === user?.userId ? 'ring-2 ring-blue-500' : ''}`}
+          >
+            <h3 className="font-bold">
+              {jugador.nombre}
+              {jugador.userId === user?.userId && ' (Tú)'}
+            </h3>
+            <p>Ki: {jugador.ki ?? 0}</p>
+            <p>Transformación: {jugador.transformacionActual || 'Ninguna'}</p>
+            <p>Cartas en mano: {jugador.cartasEnMano ? jugador.cartasEnMano.length : jugador.numeroCartas || 0}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Cartas del jugador actual */}
+      {jugadorActual && (
+        <div className="my-hand">
+          <h3 className="text-xl font-bold mb-2">Tus Cartas</h3>
+          <div className="cards flex gap-2 overflow-x-auto">
+            {jugadorActual.cartasEnMano.map((carta) => (
+              <button
+                key={carta.id}
+                onClick={() => esMiTurno && jugarCarta(carta.id)}
+                disabled={!esMiTurno}
+                className="card border-2 rounded p-2 min-w-[120px] hover:border-blue-500 disabled:opacity-50"
+              >
+                <img src={carta.imagenUrl} alt={carta.nombre} className="w-full" />
+                <p className="text-sm font-bold">{carta.nombre}</p>
+              </button>
+            ))}
+          </div>
+
+          {/* Acciones */}
+          <div className="actions mt-4 flex gap-2">
+            <button
+              onClick={robarCarta}
+              disabled={!esMiTurno}
+              className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-400"
+            >
+              Robar Carta
+            </button>
+            
+            <button
+              onClick={() => usarTransformacion('SSJ1')}
+              disabled={!esMiTurno || jugadorActual.ki < 3}
+              className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 disabled:bg-gray-400"
+            >
+              Transformar SSJ
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## ⚠️ Manejo de Errores
+
+### Tipos de Errores del Backend
+
+```typescript
+// types/error.types.ts
+export interface ApiError {
+  message: string;
+  status?: number;
+  timestamp?: string;
+}
+```
+
+### Manejo Centralizado
+
+```typescript
+// lib/errorHandler.ts
+export const handleApiError = (error: any): string => {
+  if (error.response) {
+    // Error de respuesta del servidor
+    const message = error.response.data?.message || 'Error del servidor';
+    
+    switch (error.response.status) {
+      case 400:
+        return message; // Bad Request
+      case 401:
+        return 'No autorizado. Por favor, inicia sesión nuevamente.';
+      case 403:
+        return 'No tienes permisos para realizar esta acción.';
+      case 404:
+        return 'Recurso no encontrado.';
+      case 409:
+        return message; // Conflict (ej: username ya existe)
+      case 500:
+        return 'Error interno del servidor.';
+      default:
+        return message;
+    }
+  } else if (error.request) {
+    // No se recibió respuesta
+    return 'No se pudo conectar con el servidor. Verifica tu conexión.';
+  } else {
+    // Error al configurar la petición
+    return error.message || 'Error desconocido';
+  }
+};
+```
+
+### Uso en Componentes
+
+```typescript
+import { handleApiError } from '@/lib/errorHandler';
+
+try {
+  await gameService.crearPartida();
+} catch (err) {
+  const errorMessage = handleApiError(err);
+  setError(errorMessage);
+}
+```
+
+---
+
+## 📝 Ejemplos Completos
+
+### Flujo Completo de Autenticación y Juego
+
+```typescript
+// app/page.tsx
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { authService } from '@/services/auth.service';
+import LoginForm from '@/components/LoginForm';
+import RegisterForm from '@/components/RegisterForm';
+
+export default function HomePage() {
+  const router = useRouter();
+  const [showRegister, setShowRegister] = useState(false);
+
+  useEffect(() => {
+    if (authService.isAuthenticated()) {
+      router.push('/dashboard');
+    }
+  }, [router]);
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-100">
+      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md">
+        <h1 className="text-3xl font-bold text-center mb-6">
+          Juego de Cartas
+        </h1>
+
+        {showRegister ? (
+          <>
+            <RegisterForm />
+            <p className="mt-4 text-center">
+              ¿Ya tienes cuenta?{' '}
+              <button
+                onClick={() => setShowRegister(false)}
+                className="text-blue-500 hover:underline"
+              >
+                Inicia Sesión
+              </button>
+            </p>
+          </>
+        ) : (
+          <>
+            <LoginForm />
+            <p className="mt-4 text-center">
+              ¿No tienes cuenta?{' '}
+              <button
+                onClick={() => setShowRegister(true)}
+                className="text-blue-500 hover:underline"
+              >
+                Regístrate
+              </button>
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+```
+
+```typescript
+// app/dashboard/page.tsx
+'use client';
+
+import { useState } from 'react';
+import { authService } from '@/services/auth.service';
+import CreateGame from '@/components/CreateGame';
+import JoinGame from '@/components/JoinGame';
+
+export default function DashboardPage() {
+  const user = authService.getCurrentUser();
+  const [activeTab, setActiveTab] = useState<'create' | 'join'>('create');
+
+  return (
+    <div className="min-h-screen bg-gray-100">
+      <nav className="bg-white shadow p-4">
+        <div className="container mx-auto flex justify-between items-center">
+          <h1 className="text-2xl font-bold">Juego de Cartas</h1>
+          <div className="flex items-center gap-4">
+            <span>Hola, {user?.username}!</span>
+            <button
+              onClick={() => {
+                authService.logout();
+                window.location.href = '/';
+              }}
+              className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+            >
+              Cerrar Sesión
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      <div className="container mx-auto mt-8 p-4">
+        <div className="bg-white rounded-lg shadow-md p-6">
+          <div className="flex gap-4 mb-6">
+            <button
+              onClick={() => setActiveTab('create')}
+              className={`px-4 py-2 rounded ${
+                activeTab === 'create'
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-gray-200'
+              }`}
+            >
+              Crear Partida
+            </button>
+            <button
+              onClick={() => setActiveTab('join')}
+              className={`px-4 py-2 rounded ${
+                activeTab === 'join'
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-gray-200'
+              }`}
+            >
+              Unirse a Partida
+            </button>
+          </div>
+
+          {activeTab === 'create' ? <CreateGame /> : <JoinGame />}
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+```typescript
+// app/game/[id]/page.tsx
+'use client';
+
+import { useParams } from 'next/navigation';
+import GameBoard from '@/components/GameBoard';
+
+export default function GamePage() {
+  const params = useParams();
+  const partidaId = params.id as string;
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-blue-900 to-purple-900">
+      <GameBoard partidaId={partidaId} />
+    </div>
+  );
+}
+```
+
+---
+
+## 🔑 Puntos Clave
+
+### Reglas del Juego
+
+1. **Jugadores**: Mínimo 2, máximo 7
+2. **Auto-inicio**: La partida comienza automáticamente cuando se une el 7º jugador
+3. **Creador**: El creador de la partida es siempre el Jugador 1
+4. **Username**: Se usa el username del usuario registrado como nombre del jugador (único)
+
+### Autenticación
+
+- El token JWT debe incluirse en todas las peticiones a `/api/**`
+- Login acepta tanto **username** como **email**
+- El username es único y se usa para identificar jugadores
+
+### WebSocket
+
+- Se requiere autenticación con JWT token
+- Todos los eventos de juego se transmiten en tiempo real
+- Reconexión automática cada 5 segundos
+
+### Endpoints Públicos
+
+- `/auth/register`
+- `/auth/login`
+- `/auth/logout`
+- `/swagger-ui/**`
+- `/ws/**` (requiere token en headers)
+
+---
+
+## 📚 Recursos Adicionales
+
+- **OpenAPI Documentation**: `http://localhost:8080/swagger-ui/index.html`
+- **WebSocket Endpoint**: `ws://localhost:8080/ws`
+- **API Base URL**: `http://localhost:8080`
+
+---
+
+## 🐛 Troubleshooting
+
+### Token Expirado
+Si recibes error 401, el token ha expirado. Cierra sesión y vuelve a iniciar.
+
+### WebSocket No Conecta
+Verifica que:
+1. El backend esté corriendo en el puerto 8080
+2. El token JWT sea válido
+3. La URL de WebSocket sea correcta
+
+### No Puedo Unirme a Partida
+Asegúrate de que:
+1. El código de partida sea correcto (6 caracteres)
+2. La partida no haya iniciado ya
+3. No haya 7 jugadores ya
+
+---
+
+¡Listo para integrar! 🚀
