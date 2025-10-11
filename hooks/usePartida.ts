@@ -39,57 +39,19 @@ export function usePartida(codigoPartida?: string) {
     setError(null);
     
     try {
-  const response = await partidaService.crearPartida();
-  setJugadorIdRef(response.jugadorId);
-      // Persistir jugadorId para que la nueva página (lobby) pueda recuperar la identidad
+      const response = await partidaService.crearPartida();
+      setJugadorIdRef(response.jugadorId);
+      
+      // Persistir jugadorId inmediatamente
       try {
         if (response && response.codigo && response.jugadorId) {
           localStorage.setItem(`jugadorId_${response.codigo}`, response.jugadorId);
+          console.log('[usePartida.crearPartida] jugadorId guardado:', response.jugadorId);
         }
       } catch (e) {
         console.warn('No se pudo guardar jugadorId en localStorage:', e);
       }
-      // Intentar cargar detalle inmediatamente para asegurar que el creador aparezca en la UI
-      try {
-        // pequeña espera para dar tiempo al backend a persistir la creación
-        await new Promise((r) => setTimeout(r, 200));
-        try {
-          const detalle = await cargarDetalle(response.codigo, response.jugadorId);
-          if (process.env.NODE_ENV === 'development') console.log('[usePartida] detalle tras crearPartida:', detalle && detalle.jugadores?.length);
-        } catch (e) {
-          // ignore — la página volverá a cargar detalle en su init
-          if (process.env.NODE_ENV === 'development') console.warn('[usePartida] cargarDetalle tras crearPartida falló:', e);
-        }
-      } catch (e) {
-        // ignore
-      }
-      // Optimistic UI: si aún no tenemos lista de jugadores, añadir al creador localmente
-      try {
-        const user = authService.getCurrentUser();
-        const creadorNombre = user?.username || 'Tú';
-        const optimistJugador = {
-          id: response.jugadorId,
-          nombre: creadorNombre,
-          numeroCartas: 0,
-          orden: 0,
-          conectado: true,
-        };
-
-        setPartida((prev) => {
-          // si ya tenemos partida con jugadores, no sobreescribir
-          if (prev && prev.jugadores && prev.jugadores.length > 0) return prev;
-          const minimal: any = {
-            codigo: response.codigo,
-            jugadorId: response.jugadorId,
-            estado: 'ESPERANDO',
-            jugadores: [optimistJugador],
-            miJugador: { id: response.jugadorId, nombre: creadorNombre, cartasEnMano: [], numeroCartas: 0 },
-          };
-          return minimal as PartidaDetailResponse;
-        });
-      } catch (e) {
-        // ignore optimistic failures
-      }
+      
       return response;
     } catch (err: any) {
       const errorMsg = err.message || 'Error al crear partida';
@@ -110,14 +72,17 @@ export function usePartida(codigoPartida?: string) {
     try {
       const response = await partidaService.unirsePartida(codigo);
       setJugadorIdRef(response.jugadorId);
-      // Persistir jugadorId para que la página de la partida lo recupere al montar
+      
+      // Persistir jugadorId inmediatamente
       try {
         if (response && response.codigo && response.jugadorId) {
           localStorage.setItem(`jugadorId_${response.codigo}`, response.jugadorId);
+          console.log('[usePartida.unirsePartida] jugadorId guardado:', response.jugadorId);
         }
       } catch (e) {
         console.warn('No se pudo guardar jugadorId en localStorage:', e);
       }
+      
       return response;
     } catch (err: any) {
       const errorMsg = err.message || 'Error al unirse a la partida';
@@ -161,6 +126,27 @@ export function usePartida(codigoPartida?: string) {
       if (!Array.isArray(detalle.jugadores)) {
         console.warn('[usePartida] detalle.jugadores no es un array, usando array vacío');
         detalle.jugadores = [];
+      }
+      
+      // CRÍTICO: Verificar que el jugador local aparece en la lista
+      // Si no está pero tenemos jugadorId, agregarlo manualmente
+      if (jId && detalle.jugadores && Array.isArray(detalle.jugadores)) {
+        const foundInList = detalle.jugadores.some((j: any) => String(j.id) === String(jId));
+        if (!foundInList && detalle.miJugador) {
+          // El servidor no incluyó al jugador en la lista pública pero sí devolvió miJugador
+          // Esto puede pasar por inconsistencias del backend - agregar manualmente
+          console.warn('[usePartida] Jugador local NO en jugadores[], agregando manualmente:', jId);
+          
+          const miJugadorPublic = {
+            id: detalle.miJugador.id || jId,
+            nombre: detalle.miJugador.nombre || 'Yo',
+            numeroCartas: detalle.miJugador.numeroCartas || 0,
+            orden: 0,
+            conectado: true,
+          };
+          
+          detalle.jugadores = [miJugadorPublic, ...detalle.jugadores];
+        }
       }
       
       setPartida(detalle);
@@ -480,12 +466,50 @@ export function usePartida(codigoPartida?: string) {
               // Asegurar que jugadores siempre sea un array
               const jugadores = Array.isArray(datos.jugadores) ? datos.jugadores : (prev?.jugadores || []);
               
+              // CRÍTICO: Verificar que el jugador local aparece en jugadores[]
+              // Si tenemos jugadorId pero no aparece en la lista, agregarlo
+              const localJugadorId = jugadorIdRef.current || jugadorIdState;
+              let jugadoresFinales = [...jugadores];
+              
+              if (localJugadorId) {
+                const foundInList = jugadoresFinales.some((j: any) => String(j.id) === String(localJugadorId));
+                
+                if (!foundInList) {
+                  console.warn('[usePartida WS] Jugador local NO en jugadores[], agregando:', localJugadorId);
+                  
+                  // Si tenemos miJugador en datos, usarlo; si no, crear uno básico
+                  const miJugadorData = datos.miJugador || prev?.miJugador;
+                  
+                  if (miJugadorData) {
+                    const miJugadorPublic = {
+                      id: miJugadorData.id || localJugadorId,
+                      nombre: miJugadorData.nombre || 'Yo',
+                      numeroCartas: miJugadorData.numeroCartas || 0,
+                      orden: jugadoresFinales.length,
+                      conectado: true,
+                    };
+                    jugadoresFinales = [miJugadorPublic, ...jugadoresFinales];
+                  } else {
+                    // Crear jugador básico si no tenemos miJugador
+                    const user = authService.getCurrentUser();
+                    const jugadorBasico = {
+                      id: localJugadorId,
+                      nombre: user?.username || 'Yo',
+                      numeroCartas: 0,
+                      orden: jugadoresFinales.length,
+                      conectado: true,
+                    };
+                    jugadoresFinales = [jugadorBasico, ...jugadoresFinales];
+                  }
+                }
+              }
+              
               // Usar datos completos del servidor
               const nuevaPartida: PartidaDetailResponse = {
                 codigo: datos.codigo || prev?.codigo || '',
                 jugadorId: datos.jugadorId || prev?.jugadorId || '',
                 estado: datos.estado || prev?.estado || 'ESPERANDO',
-                jugadores: jugadores,
+                jugadores: jugadoresFinales,
                 miJugador: datos.miJugador || prev?.miJugador || { id: '', nombre: '', cartasEnMano: [], numeroCartas: 0 },
                 turnoActual: datos.turnoActual || prev?.turnoActual,
                 atributoSeleccionado: datos.atributoSeleccionado || prev?.atributoSeleccionado,

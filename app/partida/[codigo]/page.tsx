@@ -3,10 +3,10 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { useLobbyRealTime } from '@/hooks/useLobbyRealTime';
 import { usePartida } from '@/hooks/usePartida';
 import { Button } from '@/components/ui/button';
 import CartaComponent from '@/components/game/CartaComponent';
-import ListaJugadores from '@/components/game/ListaJugadores';
 import { cartaService } from '@/services/partida.service';
 import type { Carta } from '@/types/api';
 import Image from 'next/image';
@@ -32,6 +32,9 @@ export default function PartidaPage() {
     conectarWebSocket,
     setJugadorId,
   } = usePartida(codigo);
+  
+  // Hook específico para el lobby en tiempo real
+  const { jugadores: jugadoresLobby, connected: lobbyConnected, loading: lobbyLoading } = useLobbyRealTime(codigo, jugadorId);
 
   // Debounce visual del estado conectado para evitar flicker corto
   const [visualConectado, setVisualConectado] = useState<boolean>(conectado);
@@ -60,79 +63,50 @@ export default function PartidaPage() {
 
     const init = async () => {
       try {
-        let savedJugadorId = undefined;
+        // Primero, intentar recuperar jugadorId guardado
+        let currentJugadorId = undefined;
         try {
-          savedJugadorId = localStorage.getItem(`jugadorId_${codigo}`) || undefined;
+          currentJugadorId = localStorage.getItem(`jugadorId_${codigo}`) || undefined;
+          console.log('[page init] jugadorId recuperado de localStorage:', currentJugadorId);
         } catch (e) {
           console.warn('No se pudo leer jugadorId de localStorage en init:', e);
         }
 
-        if (savedJugadorId) {
-          setJugadorId(savedJugadorId);
-          // Intentar reconectar en backend usando el jugadorId guardado para que el servidor
-          // vuelva a asociar y publique el estado canónico (cancelando grace si aplica).
-          try {
-            const resp = await (await import('@/services/partida.service')).partidaService.reconectarPartida(codigo, savedJugadorId);
-            if (resp && resp.jugadorId) {
-              // actualizar localStorage con el jugadorId confirmado por el servidor
-              try { localStorage.setItem(`jugadorId_${codigo}`, resp.jugadorId); } catch (e) {}
-              setJugadorId(resp.jugadorId);
-                if (process.env.NODE_ENV === 'development') console.log('[page] reconectarPartida response:', resp);
-                // after reconnection, also request canonical state via WS in case server didn't publish yet
-                try {
-                  const { websocketService } = await import('@/lib/websocket');
-                  websocketService.solicitarEstadoMultiple(codigo, resp.jugadorId);
-                  websocketService.aggressiveRegister(codigo, resp.jugadorId);
-                } catch (e) {
-                  // ignore
-                }
-              // Si el backend devolvió estado, cargar detalle con ese jugadorId
-              try { await cargarDetalle(codigo, resp.jugadorId); } catch (e) {}
-            } else {
-              // Fallback: cargar detalle con el jugadorId local
-              await cargarDetalle(codigo, savedJugadorId);
-            }
-          } catch (e) {
-            console.warn('Reconectar con savedJugadorId falló, intentando cargar detalle local:', e);
-            await cargarDetalle(codigo, savedJugadorId);
-          }
+        if (currentJugadorId) {
+          // Ya tenemos jugadorId - solo necesitamos setear
+          setJugadorId(currentJugadorId);
         } else {
-          // Intentar reconectar vía REST sin jugadorId (usar token en cookie si está presente)
+          // Primera vez - necesitamos obtener jugadorId del servidor
+          console.log('[page init] No hay jugadorId guardado, obteniendo del servidor');
+          
           try {
+            // Intentar reconectar (el servidor nos dará un jugadorId)
             const resp = await (await import('@/services/partida.service')).partidaService.reconectarPartida(codigo);
             if (resp && resp.jugadorId) {
+              console.log('[page init] jugadorId obtenido de reconectar:', resp.jugadorId);
+              currentJugadorId = resp.jugadorId;
               setJugadorId(resp.jugadorId);
-              try { localStorage.setItem(`jugadorId_${codigo}`, resp.jugadorId); } catch (e) {}
-              // cargar detalle con el jugadorId
-              await cargarDetalle(codigo, resp.jugadorId);
-              if (process.env.NODE_ENV === 'development') console.log('[page] reconectarPartida (no id) response:', resp);
-              try {
-                const { websocketService } = await import('@/lib/websocket');
-                websocketService.solicitarEstadoMultiple(codigo, resp.jugadorId);
-                websocketService.aggressiveRegister(codigo, resp.jugadorId);
-              } catch (e) {}
-              // Si el backend está algo retrasado en publicar el estado completo, intentar un par de reintentos cortos
-              (async () => {
-                try {
-                  await new Promise(r => setTimeout(r, 300));
-                  await cargarDetalle(codigo, resp.jugadorId);
-                  await new Promise(r => setTimeout(r, 700));
-                  await cargarDetalle(codigo, resp.jugadorId);
-                } catch (e) {
-                  // ignore
-                }
-              })();
-            } else {
-              // fallback: intentar cargar detalle sin jugadorId (puede devolver vista pública)
-              await cargarDetalle(codigo, user?.userId);
+              try { 
+                localStorage.setItem(`jugadorId_${codigo}`, resp.jugadorId);
+                console.log('[page init] jugadorId guardado en localStorage');
+              } catch (e) {
+                console.warn('No se pudo guardar jugadorId:', e);
+              }
             }
           } catch (reErr) {
-            console.warn('Reconectar sin jugadorId falló (continuando):', reErr);
-            await cargarDetalle(codigo, user?.userId);
+            console.warn('[page init] reconectarPartida falló:', reErr);
           }
         }
 
-        await conectarWebSocket(codigo);
+        // Cargar el detalle de la partida solo si tenemos jugadorId
+        if (currentJugadorId) {
+          console.log('[page init] Cargando detalle de partida con jugadorId:', currentJugadorId);
+          await cargarDetalle(codigo, currentJugadorId);
+        } else {
+          console.warn('[page init] No se pudo obtener jugadorId, omitiendo carga de detalle');
+        }
+
+        // Cargar cartas disponibles
         const cartas = await cartaService.obtenerCartas();
         setCartasDisponibles(cartas);
       } catch (err) {
@@ -141,7 +115,7 @@ export default function PartidaPage() {
     };
 
     init();
-  }, [codigo, isAuthenticated, user]);
+  }, [codigo, setJugadorId, cargarDetalle]);
 
   useEffect(() => {
     if (jugadorId && codigo) {
@@ -225,6 +199,19 @@ export default function PartidaPage() {
     );
   }
 
+  // Si tenemos jugadorId pero no partida aún, mostrar estado de espera
+  if (!partida && jugadorId) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-black">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-orange-500 mx-auto mb-4"></div>
+          <p className="text-white text-xl">Conectando al lobby...</p>
+          <p className="text-gray-400 text-sm mt-2">Código: {codigo}</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!partida) return null;
 
   const miJugador = partida.miJugador;
@@ -276,21 +263,106 @@ export default function PartidaPage() {
 
         <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
-            <ListaJugadores jugadores={partida.jugadores} jugadorActualId={jugadorId || ''} turnoActualId={partida.turnoActual} />
+            {/* Lobby de jugadores en tiempo real */}
+            <div className="bg-black/80 backdrop-blur-sm rounded-lg border border-orange-500/30 p-4">
+              <h2 className="text-xl font-bold text-orange-500 mb-4">
+                Jugadores {jugadoresLobby.length > 0 && `(${jugadoresLobby.length})`}
+              </h2>
+              
+              {lobbyLoading && (
+                <div className="text-gray-400 text-center py-4">
+                  <p>Cargando lobby...</p>
+                </div>
+              )}
+              
+              {!lobbyLoading && !lobbyConnected && (
+                <div className="text-gray-400 text-center py-4">
+                  <p>Reconectando...</p>
+                </div>
+              )}
+              
+              {!lobbyLoading && lobbyConnected && jugadoresLobby.length === 0 && (
+                <div className="text-gray-400 text-center py-4">
+                  <p>No hay jugadores en la partida</p>
+                  <p className="text-xs mt-2">Esperando conexión...</p>
+                </div>
+              )}
+              
+              <div className="space-y-3">
+                {jugadoresLobby.map((jugador: any) => {
+                  const esTuTurno = partida?.turnoActual === jugador.id;
+                  const eresT= jugador.isMe;
+                  
+                  return (
+                    <div
+                      key={jugador.id}
+                      className={`p-3 rounded-lg border-2 transition-all ${
+                        esTuTurno
+                          ? 'bg-orange-600/20 border-orange-500 animate-pulse'
+                          : eresT
+                          ? 'bg-blue-600/20 border-blue-500'
+                          : 'bg-gray-800/50 border-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          {/* Avatar */}
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg ${
+                            esTuTurno ? 'bg-orange-500' : eresT ? 'bg-blue-500' : 'bg-gray-600'
+                          }`}>
+                            {jugador.nombre.charAt(0).toUpperCase()}
+                          </div>
+                          
+                          <div>
+                            <p className={`font-semibold ${
+                              eresT ? 'text-blue-400' : 'text-white'
+                            }`}>
+                              {jugador.nombre} {eresT && '(Tú)'}
+                            </p>
+                            <p className="text-sm text-gray-400">
+                              {jugador.numeroCartas || 0} {jugador.numeroCartas === 1 ? 'carta' : 'cartas'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {/* Estado de conexión */}
+                          <div className="flex items-center gap-1">
+                            <div className={`w-2 h-2 rounded-full ${
+                              jugador.conectado ? 'bg-green-500' : 'bg-red-500'
+                            }`} />
+                            <span className="text-xs text-gray-400">
+                              {jugador.conectado ? 'Conectado' : 'Desconectado'}
+                            </span>
+                          </div>
+
+                          {/* Indicador de turno */}
+                          {esTuTurno && (
+                            <span className="text-orange-400 text-sm font-bold">
+                              ▶ Su turno
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
 
             <div className="mt-6 bg-black/80 backdrop-blur-sm rounded-lg border border-orange-500/30 p-4">
               <h3 className="text-lg font-bold text-orange-500 mb-3">Información</h3>
               
-              {partida.estado === 'ESPERANDO' && (
+              {partida && partida.estado === 'ESPERANDO' && (
                 <div className="space-y-3">
-                  <p className="text-gray-300 text-sm">Esperando jugadores... ({partida.jugadores.length}/7)</p>
-                  {partida.jugadores.length >= 2 && partida.jugadores[0].id === jugadorId && (
+                  <p className="text-gray-300 text-sm">Esperando jugadores... ({jugadoresLobby.length}/7)</p>
+                  {jugadoresLobby.length >= 2 && jugadoresLobby.length > 0 && jugadoresLobby[0].id === jugadorId && (
                     <Button onClick={() => iniciarPartida(codigo)} className="w-full bg-green-600 hover:bg-green-700">🎮 Iniciar Partida</Button>
                   )}
                 </div>
               )}
 
-              {partida.atributoSeleccionado && (
+              {partida && partida.atributoSeleccionado && (
                 <div className="p-3 bg-orange-900/30 border border-orange-500 rounded-lg">
                   <p className="text-sm text-gray-300">Atributo en juego:</p>
                   <p className="text-xl font-bold text-orange-400 capitalize">{partida.atributoSeleccionado}</p>

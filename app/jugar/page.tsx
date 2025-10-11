@@ -28,6 +28,20 @@ export default function JugarPage() {
     
     try {
       const response = await crearPartida();
+      
+      // Asegurar que el jugadorId se haya guardado en localStorage antes de redirigir
+      if (response.jugadorId && response.codigo) {
+        try {
+          localStorage.setItem(`jugadorId_${response.codigo}`, response.jugadorId);
+          console.log('[JugarPage] jugadorId guardado antes de redirigir:', response.jugadorId);
+        } catch (e) {
+          console.warn('[JugarPage] Error guardando jugadorId:', e);
+        }
+      }
+      
+      // Pequeño delay para asegurar que localStorage se persista
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
       router.push(`/partida/${response.codigo}`);
     } catch (err: any) {
       setError(err.message || 'Error al crear partida');
@@ -45,6 +59,20 @@ export default function JugarPage() {
 
     try {
       const response = await unirsePartida(codigoPartida.toUpperCase());
+      
+      // Asegurar que el jugadorId se haya guardado en localStorage antes de redirigir
+      if (response.jugadorId && response.codigo) {
+        try {
+          localStorage.setItem(`jugadorId_${response.codigo}`, response.jugadorId);
+          console.log('[JugarPage] jugadorId guardado antes de redirigir:', response.jugadorId);
+        } catch (e) {
+          console.warn('[JugarPage] Error guardando jugadorId:', e);
+        }
+      }
+      
+      // Pequeño delay para asegurar que localStorage se persista
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
       router.push(`/partida/${response.codigo}`);
     } catch (err: any) {
       setError(err.message || 'Error al unirse a la partida');
