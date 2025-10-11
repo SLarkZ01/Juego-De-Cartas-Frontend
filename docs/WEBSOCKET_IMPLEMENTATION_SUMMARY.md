@@ -59,6 +59,18 @@ Detalles técnicos:
 - El tiempo por defecto es 5 segundos (configurable en el servicio si se desea).
    - El tiempo por defecto es 5 segundos y ahora es configurable mediante la propiedad Spring `app.disconnect.graceSeconds`.
 
+Detalles de sincronización y nota para frontend Copilot:
+
+- Sincronización por `jugadorId` (PlayerSyncService): para evitar condiciones de carrera entre la tarea programada que marca desconectado y las acciones de reconexión (REST o STOMP), el backend añade una sincronización en memoria por `jugadorId` que serializa la cancelación de la tarea y la persistencia del campo `jugador.conectado`. Esto garantiza que, en un despliegue de una sola instancia, la reconexión dentro del periodo de gracia prevalezca.
+
+- Nota para el Copilot del Frontend (qué implementar):
+   1. Si el frontend conserva `jugadorId`, intentar `POST /api/partidas/{codigo}/reconectar` al montar el lobby para marcar al jugador como conectado lo antes posible.
+   2. Abrir la conexión WS y publicar a `/app/partida/registrar` con `{ jugadorId, partidaCodigo }` en `onConnect`.
+   3. Suscribirse a `/topic/partida/{codigo}` y confiar en el `PartidaResponse` publicado para reflejar el estado de conexión.
+   4. En despliegues multinodo, coordinar con backend para usar locks distribuidos (Redis/Redisson) o añadir retries/backoff en `registrar`/`reconectar`.
+
+   Ejemplo práctico: hay un hook y un fragmento `Lobby.tsx` listos para copiar en `docs/GUIA_INTEGRACION_NEXTJS.md` bajo la sección "Ejemplo listo para copiar/pegar (hook + Lobby render)".
+
 Además:
 - `PartidaWebSocketController` admite que el mensaje enviado a `/app/partida/registrar` incluya opcionalmente `partidaCodigo` para que el servidor marque inmediatamente `conectado=true` y asocie la sesión a la partida indicada.
 - El endpoint `POST /api/partidas/{codigo}/reconectar` registra información en logs (partida y jugadorId cuando se recibe) para facilitar debugging.

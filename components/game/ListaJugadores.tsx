@@ -9,12 +9,30 @@ interface ListaJugadoresProps {
 }
 
 export default function ListaJugadores({ jugadores, jugadorActualId, turnoActualId }: ListaJugadoresProps) {
+  // Log para diagnóstico
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[ListaJugadores] Renderizando:', {
+      jugadoresCount: jugadores?.length || 0,
+      jugadorActualId,
+      jugadores: jugadores?.map(j => ({ id: j.id, nombre: j.nombre, conectado: j.conectado })),
+    });
+  }
+
   return (
     <div className="bg-black/80 backdrop-blur-sm rounded-lg border border-orange-500/30 p-4">
-      <h2 className="text-xl font-bold text-orange-500 mb-4">Jugadores</h2>
+      <h2 className="text-xl font-bold text-orange-500 mb-4">
+        Jugadores {jugadores?.length > 0 && `(${jugadores.length})`}
+      </h2>
+      
+      {(!jugadores || jugadores.length === 0) && (
+        <div className="text-gray-400 text-center py-4">
+          <p>No hay jugadores en la partida</p>
+          <p className="text-xs mt-2">Esperando conexión...</p>
+        </div>
+      )}
       
       <div className="space-y-3">
-        {jugadores.map((jugador) => {
+        {jugadores?.map((jugador) => {
           const esTuTurno = jugador.id === turnoActualId;
           const eresT= jugador.id === jugadorActualId;
           
@@ -71,7 +89,7 @@ export default function ListaJugadores({ jugadores, jugadorActualId, turnoActual
               </div>
             </div>
           );
-        })}
+        }) || []}
       </div>
     </div>
   );

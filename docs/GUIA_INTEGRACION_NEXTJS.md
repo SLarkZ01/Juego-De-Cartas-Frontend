@@ -822,6 +822,111 @@ export function useLobby(partidaCodigo: string) {
 
   return { jugadores };
 }
+
+---
+
+Ejemplo listo para copiar/pegar (hook + Lobby render)
+
+```typescript
+// hooks/useLobbyRealTime.ts
+import { useEffect, useRef, useState } from 'react';
+import SockJS from 'sockjs-client';
+import { Client, IMessage } from '@stomp/stompjs';
+import api from '@/lib/axios';
+
+export interface JugadorDTO {
+  id: string;
+  nombre: string;
+  conectado?: boolean;
+}
+
+export function useLobbyRealTime(partidaCodigo: string | null, jugadorId?: string | null) {
+  const clientRef = useRef<Client | null>(null);
+  const [jugadores, setJugadores] = useState<JugadorDTO[]>([]);
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    if (!partidaCodigo) return;
+
+    let mounted = true;
+
+    const doReconnectREST = async () => {
+      if (!jugadorId) return;
+      try {
+        await api.post(`/api/partidas/${partidaCodigo}/reconectar`, { jugadorId });
+      } catch (e) {
+        console.warn('Reconectar REST falló', e);
+      }
+    };
+
+    const socket = new SockJS(`${process.env.NEXT_PUBLIC_WS_URL}`);
+    const client = new Client({
+      webSocketFactory: () => socket,
+      debug: () => {},
+      onConnect: () => {
+        setConnected(true);
+        if (jugadorId) {
+          client.publish({
+            destination: '/app/partida/registrar',
+            body: JSON.stringify({ jugadorId, partidaCodigo }),
+            skipContentLengthHeader: true,
+          });
+        }
+        client.subscribe(`/topic/partida/${partidaCodigo}`, (msg: IMessage) => {
+          try {
+            const payload = JSON.parse(msg.body);
+            if (payload && Array.isArray(payload.jugadores)) {
+              if (mounted) setJugadores(payload.jugadores);
+            } else if (payload.partida && payload.partida.jugadores) {
+              if (mounted) setJugadores(payload.partida.jugadores);
+            }
+          } catch (err) {
+            console.error('Error parseando mensaje WS', err);
+          }
+        });
+      },
+      onDisconnect: () => setConnected(false),
+      onStompError: (err) => console.error('STOMP error', err),
+    });
+
+    (async () => {
+      await doReconnectREST();
+      client.activate();
+      clientRef.current = client;
+    })();
+
+    return () => {
+      mounted = false;
+      client.deactivate();
+    };
+  }, [partidaCodigo, jugadorId]);
+
+  const renderJugadores = (meId?: string | null) =>
+    jugadores.map((j) => ({ ...j, isMe: !!meId && j.id === meId }));
+
+  return { jugadores: renderJugadores(jugadorId), connected };
+}
+```
+
+```tsx
+// components/Lobby.tsx (fragmento)
+import React from 'react';
+import { useLobbyRealTime } from '@/hooks/useLobbyRealTime';
+
+export default function Lobby({ partidaCodigo, currentPlayerId }: { partidaCodigo: string; currentPlayerId?: string | null; }) {
+  const { jugadores } = useLobbyRealTime(partidaCodigo, currentPlayerId);
+
+  return (
+    <ul>
+      {jugadores.map(p => (
+        <li key={p.id} style={{ fontWeight: (p as any).isMe ? 700 : 400 }}>
+          {p.nombre} {(p as any).isMe ? ' (Tú)' : ''} {p.conectado ? '🟢' : '🔴'}
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
 ```
 
 ### Grace period en reconexiones (nuevo)
@@ -847,6 +952,22 @@ Notas importantes:
 Nota importante sobre sincronización de estado:
 
 - Para evitar condiciones de carrera el servidor publica el estado canónico de la partida inmediatamente después de que detecta una nueva suscripción a `/topic/partida/{codigo}`. En la práctica esto significa que, después de reconectar vía REST o reabrir la conexión WS, basta con suscribirse al topic: el servidor enviará el `PartidaResponse` actual y el cliente no debería perder eventos publicados justo antes de la suscripción.
+
+Sección para el Copilot del Frontend (qué cambió y acciones recomendadas)
+
+- Cambios aplicados en el backend:
+  - Reconexión por REST: `POST /api/partidas/{codigo}/reconectar` (opcional body `{ jugadorId }`). Marca al jugador como conectado y publica el `PartidaResponse` actualizado.
+  - Registro STOMP: destino `/app/partida/registrar` acepta payload `{ jugadorId, partidaCodigo }`. Asociará la sesión WebSocket con `jugadorId` y, si se incluye `partidaCodigo`, marcará al jugador como conectado en esa partida.
+  - Grace period configurables: propiedad Spring `app.disconnect.graceSeconds` (valor en segundos). Por defecto `5`.
+  - Sincronización local: para evitar carreras entre la tarea de desconexión y la cancelación por reconexión, el backend usa una sincronización por `jugadorId` en memoria (válida para despliegues single-instance). En despliegues multinodo se debe coordinar con el equipo de backend para usar un lock distribuido (por ejemplo Redis/Redisson) o persistir el mapping session->jugador.
+
+- Acciones concretas que debe aplicar el Copilot del frontend:
+  1. Al montar la vista del lobby, opcionalmente llamar a `POST /api/partidas/{codigo}/reconectar` con `{ jugadorId }` si lo tienes en localStorage. Esto reduce la ventana en la que el jugador podría aparecer desconectado.
+  2. Abrir la conexión WS y, en `onConnect`, publicar inmediatamente a `/app/partida/registrar` con `{ jugadorId, partidaCodigo }` (si tienes `partidaCodigo` disponible). Esto asocia la nueva sesión con el jugador y permite que el servidor cancele cualquier desconexión pendiente.
+  3. Subscribirse a `/topic/partida/{codigo}` y confiar en el `PartidaResponse` enviado por el servidor para renderizar la lista de jugadores y sus flags `conectado`.
+  4. Manejar confirmación: después de la reconexión REST o del registro STOMP, esperar el `PartidaResponse` publicado por el servidor antes de confiar en un cambio de UI persistente.
+  5. Para despliegues multinodo, implementar retries y lógica de reintento en el frontend (ej. reintentar `registrar` y `reconectar` varias veces con backoff) y coordinar con backend para habilitar locks distribuidos si se necesita tolerancia a fallos del servidor.
+
 
 
 ### Hook de React para WebSocket

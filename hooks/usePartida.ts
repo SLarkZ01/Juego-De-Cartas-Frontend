@@ -8,8 +8,8 @@ import type {
   PartidaResponse,
   PartidaDetailResponse,
   EventoWebSocket,
-  AccionWebSocket,
 } from '@/types/api';
+import { AccionWebSocket } from '@/types/api';
 
 /**
  * Hook personalizado para manejar partidas
@@ -49,7 +49,47 @@ export function usePartida(codigoPartida?: string) {
       } catch (e) {
         console.warn('No se pudo guardar jugadorId en localStorage:', e);
       }
-      // Note: page will call cargarDetalle on mount; avoid calling it here to keep flow simple
+      // Intentar cargar detalle inmediatamente para asegurar que el creador aparezca en la UI
+      try {
+        // pequeña espera para dar tiempo al backend a persistir la creación
+        await new Promise((r) => setTimeout(r, 200));
+        try {
+          const detalle = await cargarDetalle(response.codigo, response.jugadorId);
+          if (process.env.NODE_ENV === 'development') console.log('[usePartida] detalle tras crearPartida:', detalle && detalle.jugadores?.length);
+        } catch (e) {
+          // ignore — la página volverá a cargar detalle en su init
+          if (process.env.NODE_ENV === 'development') console.warn('[usePartida] cargarDetalle tras crearPartida falló:', e);
+        }
+      } catch (e) {
+        // ignore
+      }
+      // Optimistic UI: si aún no tenemos lista de jugadores, añadir al creador localmente
+      try {
+        const user = authService.getCurrentUser();
+        const creadorNombre = user?.username || 'Tú';
+        const optimistJugador = {
+          id: response.jugadorId,
+          nombre: creadorNombre,
+          numeroCartas: 0,
+          orden: 0,
+          conectado: true,
+        };
+
+        setPartida((prev) => {
+          // si ya tenemos partida con jugadores, no sobreescribir
+          if (prev && prev.jugadores && prev.jugadores.length > 0) return prev;
+          const minimal: any = {
+            codigo: response.codigo,
+            jugadorId: response.jugadorId,
+            estado: 'ESPERANDO',
+            jugadores: [optimistJugador],
+            miJugador: { id: response.jugadorId, nombre: creadorNombre, cartasEnMano: [], numeroCartas: 0 },
+          };
+          return minimal as PartidaDetailResponse;
+        });
+      } catch (e) {
+        // ignore optimistic failures
+      }
       return response;
     } catch (err: any) {
       const errorMsg = err.message || 'Error al crear partida';
@@ -105,10 +145,33 @@ export function usePartida(codigoPartida?: string) {
       const detalle = await partidaService.obtenerPartidaDetalle(codigo, jId);
       if (process.env.NODE_ENV === 'development') {
         try {
-          console.log('[usePartida] detalle obtenido:', { codigo, jugadorId: jId, detalleSnippet: { jugadores: detalle.jugadores?.length, miJugador: detalle.miJugador ? true : false } });
+          console.log('[usePartida] detalle obtenido:', { 
+            codigo, 
+            jugadorId: jId, 
+            detalleSnippet: { 
+              jugadores: detalle.jugadores?.length, 
+              miJugador: detalle.miJugador ? true : false,
+              jugadoresCompleto: detalle.jugadores,
+            } 
+          });
         } catch (e) {}
       }
+      
+      // Asegurar que jugadores es un array válido
+      if (!Array.isArray(detalle.jugadores)) {
+        console.warn('[usePartida] detalle.jugadores no es un array, usando array vacío');
+        detalle.jugadores = [];
+      }
+      
       setPartida(detalle);
+      // Verificar inmediatamente si nuestro jugador aparece en la lista recibida
+      (async () => {
+        try {
+          await verifyAndRecoverMiJugador(codigo, jId);
+        } catch (e) {
+          // ignore recovery errors
+        }
+      })();
       return detalle;
     } catch (err: any) {
       const errorMsg = err.message || 'Error al cargar detalle de partida';
@@ -118,6 +181,51 @@ export function usePartida(codigoPartida?: string) {
       setLoading(false);
     }
   }, []);
+
+  /**
+   * Si el jugador local no aparece en `partida.jugadores`, intentar recuperar:
+   * - Llamar `obtenerPartidaDetalle` para pedir la vista personalizada
+   * - Enviar SOLICITAR_ESTADO por WS y aggressiveRegister para reafirmar session->jugador
+   */
+  async function verifyAndRecoverMiJugador(codigo: string, jugadorId?: string | null) {
+    try {
+      const jId = jugadorId || jugadorIdRef.current || jugadorIdState || undefined;
+      if (!jId) return;
+
+      // Si no tenemos partida aún, nada que verificar
+      if (!partida) return;
+
+      const found = partida.jugadores?.some((p: any) => String(p.id) === String(jId));
+      if (found) return; // todo ok
+
+      console.warn('[usePartida] Mi jugador NO aparece en partida.jugadores — intentando recovery', { codigo, jugadorId: jId, jugadores: partida.jugadores?.map((p: any) => p.id) });
+
+      // Intentar obtener detalle directamente (3 reintentos)
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const detalle = await partidaService.obtenerPartidaDetalle(codigo, jId as string);
+          if (detalle && detalle.miJugador && (detalle.miJugador as any).id) {
+            console.log('[usePartida] Recovery: detalle obtenido que incluye miJugador, aplicando estado');
+            setPartida(detalle);
+            return;
+          }
+        } catch (e) {
+          console.warn(`[usePartida] intento ${attempt} obtenerPartidaDetalle falló:`, e);
+        }
+        await new Promise((r) => setTimeout(r, 200 * attempt));
+      }
+
+      // Forzar SOLICITAR_ESTADO por WS y registros agresivos como último recurso
+      try {
+        websocketService.solicitarEstadoMultiple(codigo, jId);
+        websocketService.aggressiveRegister(codigo, jId);
+      } catch (e) {
+        console.warn('[usePartida] Error enviando solicitudes WS de recovery:', e);
+      }
+    } catch (err) {
+      console.warn('[usePartida] Error en verifyAndRecoverMiJugador:', err);
+    }
+  }
 
   /**
    * Iniciar partida
@@ -337,20 +445,79 @@ export function usePartida(codigoPartida?: string) {
 
         console.log('✅ Evento procesado:', evento.tipo, evento);
 
+        // Log detallado para diagnóstico
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[usePartida] Evento recibido:', {
+            tipo: evento.tipo,
+            datos: evento.datos,
+            datosKeys: evento.datos ? Object.keys(evento.datos) : [],
+            jugadores: (evento.datos as any)?.jugadores,
+            miJugador: (evento.datos as any)?.miJugador,
+          });
+        }
+
         // Agregar evento a la lista
         setEventos((prev) => [evento, ...prev].slice(0, 100)); // Mantener últimos 100 eventos
 
         // Actualizar estado según el tipo de evento
-  const tipoStr = String(evento.tipo);
-  if ((tipoStr === 'ESTADO_ACTUALIZADO' || tipoStr === 'PARTIDA_ESTADO') && evento.datos) {
+        const tipoStr = String(evento.tipo);
+        if ((tipoStr === 'ESTADO_ACTUALIZADO' || tipoStr === 'PARTIDA_ESTADO') && evento.datos) {
+          // El servidor puede enviar PartidaResponse directamente en datos
+          const datos = evento.datos as any;
+          
           setPartida((prev) => {
-            if (!prev) return evento.datos as PartidaDetailResponse;
+            // Si datos contiene la estructura completa de PartidaDetailResponse
+            if (datos.jugadores || datos.miJugador || datos.codigo) {
+              if (process.env.NODE_ENV === 'development') {
+                console.log('[usePartida] Aplicando PartidaResponse completo:', {
+                  jugadoresCount: datos.jugadores?.length,
+                  miJugadorId: datos.miJugador?.id,
+                  codigo: datos.codigo,
+                  datosCompletos: datos,
+                });
+              }
+              
+              // Asegurar que jugadores siempre sea un array
+              const jugadores = Array.isArray(datos.jugadores) ? datos.jugadores : (prev?.jugadores || []);
+              
+              // Usar datos completos del servidor
+              const nuevaPartida: PartidaDetailResponse = {
+                codigo: datos.codigo || prev?.codigo || '',
+                jugadorId: datos.jugadorId || prev?.jugadorId || '',
+                estado: datos.estado || prev?.estado || 'ESPERANDO',
+                jugadores: jugadores,
+                miJugador: datos.miJugador || prev?.miJugador || { id: '', nombre: '', cartasEnMano: [], numeroCartas: 0 },
+                turnoActual: datos.turnoActual || prev?.turnoActual,
+                atributoSeleccionado: datos.atributoSeleccionado || prev?.atributoSeleccionado,
+                tiempoRestante: datos.tiempoRestante || prev?.tiempoRestante,
+              };
+              
+              if (process.env.NODE_ENV === 'development') {
+                console.log('[usePartida] Estado actualizado:', nuevaPartida);
+              }
+              
+              return nuevaPartida;
+            }
+            
+            // Si es un merge parcial
+            if (!prev) {
+              // Crear estructura mínima válida
+              return {
+                codigo: datos.codigo || '',
+                jugadorId: datos.jugadorId || '',
+                estado: datos.estado || 'ESPERANDO',
+                jugadores: Array.isArray(datos.jugadores) ? datos.jugadores : [],
+                miJugador: datos.miJugador || { id: '', nombre: '', cartasEnMano: [], numeroCartas: 0 },
+              } as PartidaDetailResponse;
+            }
+            
             return {
               ...prev,
-              ...evento.datos,
+              ...datos,
+              jugadores: Array.isArray(datos.jugadores) ? datos.jugadores : prev.jugadores,
             } as PartidaDetailResponse;
           });
-  } else if (String(evento.tipo) === 'JUGADOR_UNIDO') {
+        } else if (String(evento.tipo) === 'JUGADOR_UNIDO') {
           // Actualizar lista de jugadores cuando alguien se une
           // Algunos eventos JUGADOR_UNIDO pueden ser compactos y no traer la lista completa;
           // en ese caso forzamos a recargar el detalle desde el servidor.
@@ -389,6 +556,42 @@ export function usePartida(codigoPartida?: string) {
       });
 
       setConectado(true);
+      // After subscribing, if we don't receive a canonical Partida with jugadores quickly,
+      // request the full detalle as a fallback (some backends only send compact events).
+      (async () => {
+        try {
+          await new Promise((r) => setTimeout(r, 350));
+          // If we don't have players yet, try to fetch detalle (REST) or request state via WS
+          if (!partida || !partida.jugadores || partida.jugadores.length === 0) {
+            const jId = jugadorIdRef.current || jugadorIdState || undefined;
+            if (jId) {
+              try {
+                // Intento REST inmediato (detalle) — preferible si el backend soporta /detalle
+                const detalle = await partidaService.obtenerPartidaDetalle(codigo, jId as string);
+                if (detalle) {
+                  if (process.env.NODE_ENV === 'development') console.log('[usePartida] detalle fallback REST recibido tras subscribe');
+                  setPartida(detalle);
+                }
+                // también solicitar estado por WS como redundancia
+                websocketService.solicitarEstadoMultiple(codigo, jId);
+                websocketService.aggressiveRegister(codigo, jId);
+              } catch (e) {
+                console.warn('[usePartida] Fallback obtenerPartidaDetalle falló:', e);
+              }
+            } else {
+              // Si no hay jugadorId, pedir estado por WS (si el servidor implementa SOLICITAR_ESTADO)
+              try {
+                // solicitar sin jugadorId también
+                websocketService.solicitarEstadoMultiple(codigo);
+              } catch (e) {
+                // ignore
+              }
+            }
+          }
+        } catch (e) {
+          // ignore fallback errors
+        }
+      })();
     } catch (err: any) {
       console.error('Error conectando WebSocket:', err);
       setError('Error al conectar con el servidor');

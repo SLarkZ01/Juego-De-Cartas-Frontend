@@ -69,7 +69,33 @@ export default function PartidaPage() {
 
         if (savedJugadorId) {
           setJugadorId(savedJugadorId);
-          await cargarDetalle(codigo, savedJugadorId);
+          // Intentar reconectar en backend usando el jugadorId guardado para que el servidor
+          // vuelva a asociar y publique el estado canónico (cancelando grace si aplica).
+          try {
+            const resp = await (await import('@/services/partida.service')).partidaService.reconectarPartida(codigo, savedJugadorId);
+            if (resp && resp.jugadorId) {
+              // actualizar localStorage con el jugadorId confirmado por el servidor
+              try { localStorage.setItem(`jugadorId_${codigo}`, resp.jugadorId); } catch (e) {}
+              setJugadorId(resp.jugadorId);
+                if (process.env.NODE_ENV === 'development') console.log('[page] reconectarPartida response:', resp);
+                // after reconnection, also request canonical state via WS in case server didn't publish yet
+                try {
+                  const { websocketService } = await import('@/lib/websocket');
+                  websocketService.solicitarEstadoMultiple(codigo, resp.jugadorId);
+                  websocketService.aggressiveRegister(codigo, resp.jugadorId);
+                } catch (e) {
+                  // ignore
+                }
+              // Si el backend devolvió estado, cargar detalle con ese jugadorId
+              try { await cargarDetalle(codigo, resp.jugadorId); } catch (e) {}
+            } else {
+              // Fallback: cargar detalle con el jugadorId local
+              await cargarDetalle(codigo, savedJugadorId);
+            }
+          } catch (e) {
+            console.warn('Reconectar con savedJugadorId falló, intentando cargar detalle local:', e);
+            await cargarDetalle(codigo, savedJugadorId);
+          }
         } else {
           // Intentar reconectar vía REST sin jugadorId (usar token en cookie si está presente)
           try {
@@ -79,6 +105,12 @@ export default function PartidaPage() {
               try { localStorage.setItem(`jugadorId_${codigo}`, resp.jugadorId); } catch (e) {}
               // cargar detalle con el jugadorId
               await cargarDetalle(codigo, resp.jugadorId);
+              if (process.env.NODE_ENV === 'development') console.log('[page] reconectarPartida (no id) response:', resp);
+              try {
+                const { websocketService } = await import('@/lib/websocket');
+                websocketService.solicitarEstadoMultiple(codigo, resp.jugadorId);
+                websocketService.aggressiveRegister(codigo, resp.jugadorId);
+              } catch (e) {}
               // Si el backend está algo retrasado en publicar el estado completo, intentar un par de reintentos cortos
               (async () => {
                 try {
@@ -200,6 +232,17 @@ export default function PartidaPage() {
   const cartaActual = miJugador?.cartaActual 
     ? cartasDisponibles.find(c => c.codigo === miJugador.cartaActual)
     : null;
+
+  // Log para diagnóstico
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[PartidaPage] Estado actual:', {
+      partidaCodigo: partida.codigo,
+      jugadoresCount: partida.jugadores?.length || 0,
+      miJugadorId: miJugador?.id,
+      jugadorIdLocal: jugadorId,
+      jugadores: partida.jugadores?.map(j => ({ id: j.id, nombre: j.nombre })),
+    });
+  }
 
   return (
     <div className="relative min-h-screen bg-black">

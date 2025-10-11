@@ -239,6 +239,54 @@ export class WebSocketService {
   }
 
   /**
+   * Publicar acción SOLICITAR_ESTADO varias veces (retries con delays) para
+   * forzar que el servidor envíe el PartidaResponse canónico si aún no lo hizo.
+   */
+  solicitarEstadoMultiple(codigoPartida: string, jugadorId?: string, delays: number[] = [0, 300, 900]) {
+    if (!this.client?.active) return;
+
+    for (const d of delays) {
+      setTimeout(() => {
+        try {
+          const payload: any = { accion: 'SOLICITAR_ESTADO' };
+          if (jugadorId) payload.jugadorId = jugadorId;
+          this.client!.publish({
+            destination: `/app/partida/${codigoPartida}/accion`,
+            body: JSON.stringify(payload),
+            skipContentLengthHeader: true,
+          });
+          if (process.env.NODE_ENV === 'development') console.log(`📤 SOLICITAR_ESTADO enviado para ${codigoPartida} (delay ${d}ms)`);
+        } catch (e) {
+          console.warn('⚠️ Error enviando SOLICITAR_ESTADO:', e);
+        }
+      }, d);
+    }
+  }
+
+  /**
+   * Aggressive register: publica repetidamente /app/partida/registrar durante
+   * una ventana corta para mitigar condiciones de carrera servidor-side.
+   */
+  aggressiveRegister(codigoPartida: string, jugadorId: string, durationMs = 1800, intervalMs = 300) {
+    if (!this.client?.active) return;
+    const rounds = Math.max(1, Math.ceil(durationMs / intervalMs));
+    for (let i = 0; i < rounds; i++) {
+      setTimeout(() => {
+        try {
+          this.client!.publish({
+            destination: '/app/partida/registrar',
+            body: JSON.stringify({ jugadorId, partidaCodigo: codigoPartida }),
+            skipContentLengthHeader: true,
+          });
+          if (process.env.NODE_ENV === 'development') console.log(`📤 aggressive register ${i + 1}/${rounds} for ${jugadorId}`);
+        } catch (e) {
+          // don't throw from aggressive attempts
+        }
+      }, i * intervalMs);
+    }
+  }
+
+  /**
    * Desuscribirse de una partida
    */
   unsubscribeFromPartida(codigoPartida: string): void {

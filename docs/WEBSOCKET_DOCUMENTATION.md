@@ -414,6 +414,21 @@ Al conectar, envía el registro a `/app/partida/registrar` incluyendo `partidaCo
     skipContentLengthHeader: true
   });
 }
+
+Sección para el Copilot del Frontend (qué cambió y pasos recomendados)
+
+- Qué cambió en el backend:
+  - `POST /api/partidas/{codigo}/reconectar` marca al jugador como conectado (acepta `{ jugadorId }` opcionalmente) y publica el `PartidaResponse` actualizado.
+  - `/app/partida/registrar` acepta `{ jugadorId, partidaCodigo }` para asociar la sesión WebSocket con el jugador y cancelar desconexiones pendientes.
+  - El servidor aplica un "grace period" configurable (`app.disconnect.graceSeconds`, por defecto 5s) antes de marcar a un jugador como desconectado.
+  - Se publica inmediatamente un `PartidaResponse` canónico al detectar una nueva suscripción a `/topic/partida/{codigo}`.
+
+- Pasos concretos que el Copilot del frontend debe implementar:
+  1. En montaje del lobby, si `jugadorId` está disponible en localStorage, opcionalmente llamar `POST /api/partidas/{codigo}/reconectar` con `{ jugadorId }` para asegurar que el jugador esté marcado como conectado en el servidor.
+  2. Conectar por WS y, en `onConnect`, publicar lo antes posible a `/app/partida/registrar` con `{ jugadorId, partidaCodigo }`.
+  3. Suscribirse a `/topic/partida/{codigo}` y usar el `PartidaResponse` publicado por el servidor para renderizar la UI (incluyendo `jugadores[].conectado`).
+  4. Implementar retries/backoff para `registrar` y `reconectar` en caso de fallos temporales (importante en despliegues con múltiples instancias).
+  5. No confiar en estados locales temporales: esperar la confirmación por `PartidaResponse` del servidor antes de marcar cambios de estado persistentes en UI.
 ```
 
 Ejemplo simple de render en React del lobby mostrando estado conectado:
@@ -429,6 +444,44 @@ function Lobby({ jugadores }) {
       ))}
     </ul>
   );
+}
+```
+
+Ejemplo listo para copiar/pegar (hook + Lobby)
+
+```typescript
+// hooks/useLobbyRealTime.ts
+import { useEffect, useRef, useState } from 'react';
+import SockJS from 'sockjs-client';
+import { Client, IMessage } from '@stomp/stompjs';
+import api from '@/lib/axios';
+
+export interface JugadorDTO { id: string; nombre: string; conectado?: boolean }
+
+export function useLobbyRealTime(partidaCodigo: string | null, jugadorId?: string | null) {
+  const clientRef = useRef<Client | null>(null);
+  const [jugadores, setJugadores] = useState<JugadorDTO[]>([]);
+
+  useEffect(() => {
+    if (!partidaCodigo) return;
+    let mounted = true;
+    const socket = new SockJS(`${process.env.NEXT_PUBLIC_WS_URL}`);
+    const client = new Client({ webSocketFactory: () => socket, onConnect() {
+      if (jugadorId) client.publish({ destination: '/app/partida/registrar', body: JSON.stringify({ jugadorId, partidaCodigo }), skipContentLengthHeader: true });
+      client.subscribe(`/topic/partida/${partidaCodigo}`, (msg: IMessage) => {
+        const payload = JSON.parse(msg.body);
+        if (payload && Array.isArray(payload.jugadores)) { if (mounted) setJugadores(payload.jugadores) }
+        else if (payload.partida && payload.partida.jugadores) { if (mounted) setJugadores(payload.partida.jugadores) }
+      });
+    }});
+
+    client.activate();
+    clientRef.current = client;
+
+    return () => { mounted = false; client.deactivate(); };
+  }, [partidaCodigo, jugadorId]);
+
+  return { jugadores };
 }
 ```
 
