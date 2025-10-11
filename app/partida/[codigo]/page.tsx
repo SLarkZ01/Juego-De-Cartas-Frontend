@@ -10,6 +10,10 @@ import CartaComponent from '@/components/game/CartaComponent';
 import { cartaService } from '@/services/partida.service';
 import type { Carta } from '@/types/api';
 import Image from 'next/image';
+import LobbyHeader from '@/components/lobby/LobbyHeader';
+import PlayersList from '@/components/lobby/PlayersList';
+import LobbyInfo from '@/components/lobby/LobbyInfo';
+import EventsList from '@/components/lobby/EventsList';
 
 export default function PartidaPage() {
   const params = useParams();
@@ -245,146 +249,51 @@ export default function PartidaPage() {
       <Image src="/images/fondo.webp" alt="Fondo" fill className="object-cover opacity-30" priority />
 
       <div className="relative z-10 min-h-screen p-4">
-        <div className="max-w-7xl mx-auto mb-6">
-          <div className="bg-black/80 backdrop-blur-sm rounded-lg border border-orange-500/30 p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-3xl font-bold text-orange-500">Partida: {codigo}</h1>
-                <p className="text-gray-400">Estado: <span className="text-white font-semibold">{partida.estado}</span></p>
-              </div>
+        <LobbyHeader codigo={codigo} estado={partida.estado} visualConectado={visualConectado} onSalir={() => router.push('/jugar')} />
 
-              <div className="flex items-center gap-4">
-                <div className={`flex items-center gap-2 px-4 py-2 rounded-lg ${visualConectado ? 'bg-green-900/30 border border-green-500' : 'bg-red-900/30 border border-red-500'}`}>
-                  <div className={`w-3 h-3 rounded-full ${visualConectado ? 'bg-green-500' : 'bg-red-500'} animate-pulse`} />
-                  <span className="text-sm text-white">{visualConectado ? 'Conectado' : 'Desconectado'}</span>
-                </div>
-                <Button onClick={() => router.push('/jugar')} variant="outline">Salir</Button>
-              </div>
+        {mensajeEvento && (
+          <div className="max-w-7xl mx-auto mt-0">
+            <div className="mt-0 p-3 bg-blue-900/30 border border-blue-500 rounded-lg">
+              <p className="text-blue-200 text-center">{mensajeEvento}</p>
             </div>
-
-            {mensajeEvento && (
-              <div className="mt-4 p-3 bg-blue-900/30 border border-blue-500 rounded-lg">
-                <p className="text-blue-200 text-center">{mensajeEvento}</p>
-              </div>
-            )}
           </div>
-        </div>
+        )}
 
         <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
-            {/* Lobby de jugadores en tiempo real */}
-            <div className="bg-black/80 backdrop-blur-sm rounded-lg border border-orange-500/30 p-4">
-              <h2 className="text-xl font-bold text-orange-500 mb-4">
-                Jugadores {jugadoresLobby.length > 0 && `(${jugadoresLobby.length})`}
-              </h2>
-              
-              {lobbyLoading && (
-                <div className="text-gray-400 text-center py-4">
-                  <p>Cargando lobby...</p>
-                </div>
-              )}
-              
-              {!lobbyLoading && !lobbyConnected && (
-                <div className="text-gray-400 text-center py-4">
-                  <p>Reconectando...</p>
-                </div>
-              )}
-              
-              {!lobbyLoading && lobbyConnected && jugadoresLobby.length === 0 && (
-                <div className="text-gray-400 text-center py-4">
-                  <p>No hay jugadores en la partida</p>
-                  <p className="text-xs mt-2">Esperando conexión...</p>
-                </div>
-              )}
-              
-              <div className="space-y-3">
-                {jugadoresLobby.map((jugador: any) => {
-                  const esTuTurno = partida?.turnoActual === jugador.id;
-                  const eresT= jugador.isMe;
-                  
-                  return (
-                    <div
-                      key={jugador.id}
-                      className={`p-3 rounded-lg border-2 transition-all ${
-                        esTuTurno
-                          ? 'bg-orange-600/20 border-orange-500 animate-pulse'
-                          : eresT
-                          ? 'bg-blue-600/20 border-blue-500'
-                          : 'bg-gray-800/50 border-gray-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          {/* Avatar */}
-                          <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg ${
-                            esTuTurno ? 'bg-orange-500' : eresT ? 'bg-blue-500' : 'bg-gray-600'
-                          }`}>
-                            {jugador.nombre.charAt(0).toUpperCase()}
-                          </div>
-                          
-                          <div>
-                            <p className={`font-semibold ${
-                              eresT ? 'text-blue-400' : 'text-white'
-                            }`}>
-                              {jugador.nombre} {eresT && '(Tú)'}
-                            </p>
-                            <p className="text-sm text-gray-400">
-                              {jugador.numeroCartas || 0} {jugador.numeroCartas === 1 ? 'carta' : 'cartas'}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          {/* Estado de conexión */}
-                          <div className="flex items-center gap-1">
-                            <div className={`w-2 h-2 rounded-full ${
-                              jugador.conectado ? 'bg-green-500' : 'bg-red-500'
-                            }`} />
-                            <span className="text-xs text-gray-400">
-                              {jugador.conectado ? 'Conectado' : 'Desconectado'}
-                            </span>
-                          </div>
-
-                          {/* Indicador de turno */}
-                          {esTuTurno && (
-                            <span className="text-orange-400 text-sm font-bold">
-                              ▶ Su turno
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+            {/* Estado del lobby (loading/reconectando/sin jugadores) */}
+            {lobbyLoading && (
+              <div className="bg-black/80 backdrop-blur-sm rounded-lg border border-orange-500/30 p-4 text-center text-gray-400">
+                <p>Cargando lobby...</p>
               </div>
-            </div>
+            )}
 
-            <div className="mt-6 bg-black/80 backdrop-blur-sm rounded-lg border border-orange-500/30 p-4">
-              <h3 className="text-lg font-bold text-orange-500 mb-3">Información</h3>
-              
-              {partida && partida.estado === 'ESPERANDO' && (
-                <div className="space-y-3">
-                  <p className="text-gray-300 text-sm">Esperando jugadores... ({jugadoresLobby.length}/7)</p>
-                  {jugadoresLobby.length >= 2 && jugadoresLobby.length > 0 && jugadoresLobby[0].id === jugadorId && (
-                    <Button onClick={() => iniciarPartida(codigo)} className="w-full bg-green-600 hover:bg-green-700">🎮 Iniciar Partida</Button>
-                  )}
-                </div>
-              )}
+            {!lobbyLoading && !lobbyConnected && (
+              <div className="bg-black/80 backdrop-blur-sm rounded-lg border border-orange-500/30 p-4 text-center text-gray-400">
+                <p>Reconectando...</p>
+              </div>
+            )}
 
-              {partida && partida.atributoSeleccionado && (
-                <div className="p-3 bg-orange-900/30 border border-orange-500 rounded-lg">
-                  <p className="text-sm text-gray-300">Atributo en juego:</p>
-                  <p className="text-xl font-bold text-orange-400 capitalize">{partida.atributoSeleccionado}</p>
-                </div>
-              )}
-            </div>
+            {!lobbyLoading && lobbyConnected && jugadoresLobby.length === 0 && (
+              <div className="bg-black/80 backdrop-blur-sm rounded-lg border border-orange-500/30 p-4 text-center text-gray-400">
+                <p>No hay jugadores en la partida</p>
+                <p className="text-xs mt-2">Esperando conexión...</p>
+              </div>
+            )}
+
+            {/* Lista de jugadores */}
+            {lobbyConnected && jugadoresLobby.length > 0 && (
+              <PlayersList jugadores={jugadoresLobby as any} partidaTurno={partida.turnoActual} />
+            )}
+
+            <LobbyInfo partidaEstado={partida.estado} jugadoresLobbyCount={jugadoresLobby.length} puedesIniciar={jugadoresLobby.length > 0 && jugadoresLobby[0].id === jugadorId} onIniciar={() => iniciarPartida(codigo)} />
           </div>
 
           <div className="lg:col-span-2 space-y-6">
             {cartaActual && (
               <div className="bg-black/80 backdrop-blur-sm rounded-lg border border-orange-500/30 p-6">
                 <h2 className="text-2xl font-bold text-orange-500 mb-4">Tu Carta</h2>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
                     <CartaComponent carta={cartaActual} atributoSeleccionado={partida.atributoSeleccionado || undefined} className="max-w-sm mx-auto" />
@@ -429,87 +338,7 @@ export default function PartidaPage() {
               </div>
             )}
 
-            {eventos.length > 0 && (
-              <div className="bg-black/80 backdrop-blur-sm rounded-lg border border-orange-500/30 p-4">
-                <h3 className="text-lg font-bold text-orange-500 mb-3">Eventos Recientes</h3>
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {eventos.slice(0, 10).map((evento, idx) => {
-                    if (!evento || !evento.tipo) return null;
-                    
-                    // Generar mensaje descriptivo
-                    let mensaje = evento.mensaje || '';
-                    let icono = '📢';
-                    
-                    switch (evento.tipo) {
-                      case 'JUGADOR_UNIDO':
-                        icono = '👋';
-                        mensaje = mensaje || 'Nuevo jugador se unió';
-                        break;
-                      case 'JUGADOR_DESCONECTADO':
-                        icono = '🚪';
-                        mensaje = mensaje || 'Jugador desconectado';
-                        break;
-                      case 'PARTIDA_INICIADA':
-                        icono = '🎮';
-                        mensaje = mensaje || 'Partida iniciada';
-                        break;
-                      case 'TURNO_CAMBIADO':
-                        icono = '🔄';
-                        mensaje = mensaje || 'Cambió el turno';
-                        break;
-                      case 'ATRIBUTO_SELECCIONADO':
-                        icono = '🎯';
-                        mensaje = mensaje || 'Atributo seleccionado';
-                        break;
-                      case 'CARTA_JUGADA':
-                        icono = '🃏';
-                        mensaje = mensaje || 'Carta jugada';
-                        break;
-                      case 'RONDA_COMPLETADA':
-                        icono = '🏆';
-                        mensaje = mensaje || 'Ronda completada';
-                        break;
-                      case 'PARTIDA_FINALIZADA':
-                        icono = '🎉';
-                        mensaje = mensaje || 'Partida finalizada';
-                        break;
-                      case 'TRANSFORMACION_ACTIVADA':
-                        icono = '⚡';
-                        mensaje = mensaje || 'Transformación activada';
-                        break;
-                      case 'ERROR':
-                        icono = '❌';
-                        break;
-                      default:
-                        icono = '📢';
-                    }
-
-                    return (
-                      <div key={idx} className="p-3 bg-gray-900/50 rounded border border-gray-700 hover:border-orange-500/50 transition-colors">
-                        <div className="flex items-start gap-2">
-                          <span className="text-xl">{icono}</span>
-                          <div className="flex-1">
-                            <span className="text-orange-400 font-semibold text-sm block">
-                              {evento.tipo.replace(/_/g, ' ')}
-                            </span>
-                            {mensaje && (
-                              <span className="text-gray-300 text-sm block mt-1">
-                                {mensaje}
-                              </span>
-                            )}
-                            {evento.timestamp && (
-                              <span className="text-gray-500 text-xs block mt-1">
-                                {new Date(evento.timestamp).toLocaleTimeString('es-ES')}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+            <EventsList eventos={eventos as any} />
           </div>
         </div>
       </div>
