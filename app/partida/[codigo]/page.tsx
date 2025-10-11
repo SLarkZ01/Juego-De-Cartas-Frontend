@@ -40,7 +40,10 @@ export default function PartidaPage() {
   const [visualConectado, setVisualConectado] = useState<boolean>(conectado);
   useEffect(() => {
     let t: number | undefined;
-    if (conectado) {
+    // En lobby (ESPERANDO) usar lobbyConnected, en juego usar conectado
+    const estadoActual = partida?.estado === 'ESPERANDO' ? lobbyConnected : conectado;
+    
+    if (estadoActual) {
       setVisualConectado(true);
     } else {
       t = window.setTimeout(() => setVisualConectado(false), 800);
@@ -48,7 +51,7 @@ export default function PartidaPage() {
     return () => {
       if (t) clearTimeout(t);
     };
-  }, [conectado]);
+  }, [conectado, lobbyConnected, partida?.estado]);
 
   const [cartasDisponibles, setCartasDisponibles] = useState<Carta[]>([]);
   const [mensajeEvento, setMensajeEvento] = useState<string>('');
@@ -101,7 +104,12 @@ export default function PartidaPage() {
         // Cargar el detalle de la partida solo si tenemos jugadorId
         if (currentJugadorId) {
           console.log('[page init] Cargando detalle de partida con jugadorId:', currentJugadorId);
-          await cargarDetalle(codigo, currentJugadorId);
+          try {
+            await cargarDetalle(codigo, currentJugadorId);
+          } catch (detalleErr) {
+            // Silenciar error - el lobby en tiempo real manejará los datos
+            console.log('[page init] cargarDetalle falló (normal si es nueva partida):', detalleErr);
+          }
         } else {
           console.warn('[page init] No se pudo obtener jugadorId, omitiendo carga de detalle');
         }
@@ -115,7 +123,8 @@ export default function PartidaPage() {
     };
 
     init();
-  }, [codigo, setJugadorId, cargarDetalle]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codigo]);
 
   useEffect(() => {
     if (jugadorId && codigo) {
