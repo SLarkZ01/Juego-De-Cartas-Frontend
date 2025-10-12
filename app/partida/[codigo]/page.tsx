@@ -38,8 +38,44 @@ export default function PartidaPage() {
     }, 2200);
   };
 
-  // Hook específico para el lobby en tiempo real (ahora con callback para partida eliminada)
-  const { jugadores: jugadoresLobby, connected: lobbyConnected, loading: lobbyLoading } = useLobbyRealTime(codigo, jugadorId, handlePartidaEliminada);
+  // Al recibir mensajes del topic principal, buscamos PARTIDA_INICIADA para cargar detalle privado
+  const handlePartidaMessage = useCallback(async (payload: any) => {
+    try {
+      // Detectar evento de inicio
+      const tipo = payload?.event || payload?.tipo || payload?.eventType || (payload?.datos && payload.datos.event);
+      if (tipo === 'PARTIDA_INICIADA' || (payload && payload.turnoActual)) {
+        // pedir detalle privado
+        try {
+          const detalle = await fetch(`/api/partidas/${codigo}/detalle?jugadorId=${encodeURIComponent(jugadorId || '')}`, { credentials: 'include' });
+          if (detalle.ok) {
+            const data = await detalle.json();
+            // Si obtuvimos la mano privada, navegar a la UI de partida (o mostrar toast)
+            // Aquí asumimos que la ruta /partida/{codigo} ya corresponde al lobby y la UI de juego
+            // se montará cuando el estado de la aplicación lo requiera.
+            setToastMessage('Partida iniciada — cargando mano privada...');
+            // opcional: redirigir a la misma página para forzar recarga de componentes del juego
+            // router.push(`/partida/${codigo}`);
+          } else {
+            console.warn('[handlePartidaMessage] GET detalle devolvió error, código', detalle.status);
+            // reintentar breve
+            setTimeout(async () => {
+              try {
+                const r2 = await fetch(`/api/partidas/${codigo}/detalle?jugadorId=${encodeURIComponent(jugadorId || '')}`, { credentials: 'include' });
+                if (r2.ok) setToastMessage('Mano cargada');
+              } catch (e) {}
+            }, 300);
+          }
+        } catch (e) {
+          console.warn('[handlePartidaMessage] error pidiendo detalle tras PARTIDA_INICIADA', e);
+        }
+      }
+    } catch (e) {
+      console.warn('[handlePartidaMessage] error procesando mensaje', e);
+    }
+  }, [codigo, jugadorId]);
+
+  // Hook específico para el lobby en tiempo real (ahora con callback para partida eliminada and partida messages)
+  const { jugadores: jugadoresLobby, connected: lobbyConnected, loading: lobbyLoading, registerSession } = useLobbyRealTime(codigo, jugadorId, handlePartidaEliminada, handlePartidaMessage);
 
   // Debounce visual del estado conectado para evitar flicker corto
   const [visualConectado, setVisualConectado] = useState<boolean>(false);
@@ -60,6 +96,7 @@ export default function PartidaPage() {
   const [showConfirmSalir, setShowConfirmSalir] = useState(false);
   const [showCancelledModal, setShowCancelledModal] = useState(false);
   const [toastMessage, setToastMessage] = useState<string>('');
+  const [starting, setStarting] = useState(false);
 
   useEffect(() => {
     // esperar a que el contexto de auth haya cargado antes de redirigir
@@ -136,6 +173,34 @@ export default function PartidaPage() {
 
   const cancelSalir = () => setShowConfirmSalir(false);
 
+  // Manejar inicio de la partida desde el lobby (creador)
+  const handleStartGame = async () => {
+    if (!codigo) return;
+    setStarting(true);
+    setToastMessage('Iniciando partida...');
+
+    try {
+      // Publish registrar via STOMP to guarantee sessionId->jugadorId mapping before starting
+      try {
+        registerSession(jugadorId);
+      } catch (e) {
+        console.warn('[handleStartGame] registerSession failed', e);
+      }
+
+  // Small delay to give STOMP time to deliver registration to the server
+  await new Promise((r) => setTimeout(r, 120));
+
+      // Llamar al endpoint que inicia la partida
+      await partidaService.iniciarPartida(codigo);
+      // Si el POST es exitoso, esperamos el evento PARTIDA_INICIADA vía WS (handlePartidaMessage)
+      setToastMessage('Solicitud de inicio enviada, esperando confirmación...');
+    } catch (err: any) {
+      console.error('Error iniciando partida:', err);
+      setToastMessage(err?.message || 'Error al iniciar partida');
+      setStarting(false);
+    }
+  };
+
   // Log para diagnóstico (lobby-focused)
   if (process.env.NODE_ENV === 'development') {
     console.log('[PartidaPage - Lobby] Estado actual:', {
@@ -195,14 +260,7 @@ export default function PartidaPage() {
               <PlayersList jugadores={jugadoresLobby as any} partidaTurno={undefined} />
             )}
 
-            <LobbyInfo partidaEstado={'ESPERANDO'} jugadoresLobbyCount={jugadoresLobby.length} puedesIniciar={jugadoresLobby.length > 0 && jugadoresLobby[0].id === jugadorId} onIniciar={async () => {
-              try {
-                await partidaService.iniciarPartida(codigo);
-                setToastMessage('Partida iniciada');
-              } catch (e: any) {
-                setToastMessage(e?.message || 'Error al iniciar partida');
-              }
-            }} />
+            <LobbyInfo partidaEstado={'ESPERANDO'} jugadoresLobbyCount={jugadoresLobby.length} puedesIniciar={jugadoresLobby.length > 0 && jugadoresLobby[0].id === jugadorId} onIniciar={handleStartGame} starting={starting} />
           </div>
 
           <div className="lg:col-span-2 space-y-6">

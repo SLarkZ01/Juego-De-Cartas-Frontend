@@ -21,7 +21,13 @@ export interface PartidaResponseWS {
   jugadores: JugadorDTO[] | null;
   eliminada?: boolean;
 }
-export function useLobbyRealTime(partidaCodigo: string | null, jugadorId?: string | null, onPartidaEliminada?: () => void) {
+export function useLobbyRealTime(
+  partidaCodigo: string | null,
+  jugadorId?: string | null,
+  onPartidaEliminada?: () => void,
+  onPartidaMessage?: (payload: any) => void,
+  onCountsMessage?: (payload: any) => void,
+) {
   const clientRef = useRef<Client | null>(null);
   const [jugadores, setJugadores] = useState<JugadorDTO[]>([]);
   const [connected, setConnected] = useState(false);
@@ -77,8 +83,11 @@ export function useLobbyRealTime(partidaCodigo: string | null, jugadorId?: strin
             try {
               const payload = JSON.parse(msg.body);
               console.log('[useLobbyRealTime] Mensaje recibido:', payload);
-              // Handle partida eliminada (nuevo campo enviado por backend)
-              if (payload && (payload.eliminada === true || payload.jugadores == null)) {
+              if (onPartidaMessage) {
+                try { onPartidaMessage(payload); } catch (e) { console.warn('[useLobbyRealTime] onPartidaMessage error', e); }
+              }
+              // Handle partida eliminada only when backend explicitly sends eliminada === true
+              if (payload && payload.eliminada === true) {
                 console.warn('[useLobbyRealTime] Partida marcada como eliminada en WS payload');
                 // limpiar lista local y avisar al consumidor
                 setJugadores([]);
@@ -109,6 +118,23 @@ export function useLobbyRealTime(partidaCodigo: string | null, jugadorId?: strin
               console.error('[useLobbyRealTime] Error parseando mensaje WS:', err);
             }
           });
+
+          // Suscribirse a counts topic si disponible
+          try {
+            client.subscribe(`/topic/partida/${partidaCodigo}/counts`, (msg: IMessage) => {
+              if (!mounted) return;
+              try {
+                const payload = JSON.parse(msg.body);
+                if (onCountsMessage) {
+                  try { onCountsMessage(payload); } catch (e) { console.warn('[useLobbyRealTime] onCountsMessage error', e); }
+                }
+              } catch (e) {
+                console.warn('[useLobbyRealTime] error parsing counts payload', e);
+              }
+            });
+          } catch (e) {
+            // ignore if topic not available
+          }
         },
         onDisconnect: () => {
           console.log('[useLobbyRealTime] WS desconectado');
@@ -135,9 +161,26 @@ export function useLobbyRealTime(partidaCodigo: string | null, jugadorId?: strin
   const renderJugadores = (meId?: string | null) =>
     jugadores.map((j) => ({ ...j, isMe: !!meId && j.id === meId }));
 
-  return { 
-    jugadores: renderJugadores(jugadorId), 
-    connected, 
-    loading 
+  // Function to explicitly register the session -> jugador mapping
+  const registerSession = (jId?: string | null) => {
+    try {
+      const client = clientRef.current;
+      if (!client) {
+        console.warn('[useLobbyRealTime] registerSession: no STOMP client available yet');
+        return;
+      }
+      const payload = { jugadorId: jId, partidaCodigo };
+      client.publish({ destination: '/app/partida/registrar', body: JSON.stringify(payload), skipContentLengthHeader: true });
+      if (process.env.NODE_ENV === 'development') console.log('[useLobbyRealTime] registerSession published', payload);
+    } catch (e) {
+      console.warn('[useLobbyRealTime] Error publishing registrar', e);
+    }
+  };
+
+  return {
+    jugadores: renderJugadores(jugadorId),
+    connected,
+    loading,
+    registerSession,
   };
 }
