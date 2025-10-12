@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { partidaService, gameplayService } from '@/services/partida.service';
 import { websocketService } from '@/lib/websocket';
 import { authService } from '@/services/auth.service';
+import { persistJugadorId, readJugadorId, isAlreadyInError, obtenerPartidaDetalleWithRetries } from '@/lib/partidaUtils';
 import type {
   PartidaResponse,
   PartidaDetailResponse,
@@ -41,16 +42,9 @@ export function usePartida(codigoPartida?: string) {
     try {
       const response = await partidaService.crearPartida();
       setJugadorIdRef(response.jugadorId);
-      
-      // Persistir jugadorId inmediatamente
-      try {
-        if (response && response.codigo && response.jugadorId) {
-          localStorage.setItem(`jugadorId_${response.codigo}`, response.jugadorId);
-          console.log('[usePartida.crearPartida] jugadorId guardado:', response.jugadorId);
-        }
-      } catch (e) {
-        console.warn('No se pudo guardar jugadorId en localStorage:', e);
-      }
+      // Persistir usando util
+      persistJugadorId(response.codigo || '', response.jugadorId);
+      if (process.env.NODE_ENV === 'development') console.log('[usePartida.crearPartida] jugadorId guardado:', response.jugadorId);
       
       return response;
     } catch (err: any) {
@@ -72,44 +66,26 @@ export function usePartida(codigoPartida?: string) {
     try {
       const response = await partidaService.unirsePartida(codigo);
       setJugadorIdRef(response.jugadorId);
-      
-      // Persistir jugadorId inmediatamente
-      try {
-        if (response && response.codigo && response.jugadorId) {
-          localStorage.setItem(`jugadorId_${response.codigo}`, response.jugadorId);
-          console.log('[usePartida.unirsePartida] jugadorId guardado:', response.jugadorId);
-        }
-      } catch (e) {
-        console.warn('No se pudo guardar jugadorId en localStorage:', e);
-      }
+      persistJugadorId(response.codigo || codigo, response.jugadorId);
+      if (process.env.NODE_ENV === 'development') console.log('[usePartida.unirsePartida] jugadorId guardado:', response.jugadorId);
       
       return response;
     } catch (err: any) {
       const errorMsg = err.message || 'Error al unirse a la partida';
 
-      // Si el backend responde que "ya estás en la partida" (o mensaje similar),
-      // tratarlo como caso de reconexión: obtener el estado actual de la partida
-      // y devolverlo para permitir la navegación.
-      try {
-        if (/ya est|ya estás|ya estas|already/i.test(errorMsg)) {
-          console.warn('[usePartida.unirsePartida] Backend indica que el jugador ya está en la partida. Intentando fallback con obtenerPartida...', errorMsg);
+      if (isAlreadyInError(errorMsg)) {
+        // fallback a obtenerPartida: el servidor considera que ya existe
+        try {
           const fallback = await partidaService.obtenerPartida(codigo);
           if (fallback && fallback.jugadorId) {
             setJugadorIdRef(fallback.jugadorId);
-            try {
-              localStorage.setItem(`jugadorId_${codigo}`, fallback.jugadorId);
-            } catch (e) {
-              console.warn('[usePartida.unirsePartida] No se pudo persistir jugadorId tras fallback:', e);
-            }
+            persistJugadorId(codigo, fallback.jugadorId);
           }
-
-          // Limpiar error y devolver el fallback como éxito
           setError(null);
           return fallback as PartidaResponse;
+        } catch (e) {
+          console.warn('[usePartida.unirsePartida] fallback obtenerPartida falló:', e);
         }
-      } catch (fallbackErr) {
-        console.warn('[usePartida.unirsePartida] Fallback obtenerPartida falló:', fallbackErr);
-        // continuar y propagar el error original abajo
       }
 
       setError(errorMsg);
@@ -212,19 +188,12 @@ export function usePartida(codigoPartida?: string) {
 
       console.warn('[usePartida] Mi jugador NO aparece en partida.jugadores — intentando recovery', { codigo, jugadorId: jId, jugadores: partida.jugadores?.map((p: any) => p.id) });
 
-      // Intentar obtener detalle directamente (3 reintentos)
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          const detalle = await partidaService.obtenerPartidaDetalle(codigo, jId as string);
-          if (detalle && detalle.miJugador && (detalle.miJugador as any).id) {
-            console.log('[usePartida] Recovery: detalle obtenido que incluye miJugador, aplicando estado');
-            setPartida(detalle);
-            return;
-          }
-        } catch (e) {
-          console.warn(`[usePartida] intento ${attempt} obtenerPartidaDetalle falló:`, e);
-        }
-        await new Promise((r) => setTimeout(r, 200 * attempt));
+      // Intentar obtener detalle con helper (reintentos)
+      const detalle = await obtenerPartidaDetalleWithRetries(partidaService, codigo, jId as string);
+      if (detalle) {
+        console.log('[usePartida] Recovery: detalle obtenido que incluye miJugador, aplicando estado');
+        setPartida(detalle);
+        return;
       }
 
       // Forzar SOLICITAR_ESTADO por WS y registros agresivos como último recurso
@@ -363,10 +332,8 @@ export function usePartida(codigoPartida?: string) {
       try {
         if (!jugadorIdRef.current) {
           try {
-            const persisted = localStorage.getItem(`jugadorId_${codigo}`);
-            if (persisted) {
-                  setJugadorIdRef(persisted);
-                }
+            const persisted = readJugadorId(codigo);
+            if (persisted) setJugadorIdRef(persisted);
           } catch (e) {
             console.warn('No se pudo leer jugadorId de localStorage:', e);
           }
@@ -399,11 +366,7 @@ export function usePartida(codigoPartida?: string) {
 
           if (resp && resp.jugadorId) {
             setJugadorIdRef(resp.jugadorId);
-            try {
-              localStorage.setItem(`jugadorId_${codigo}`, resp.jugadorId);
-            } catch (e) {
-              console.warn('No se pudo persistir jugadorId tras reconectar:', e);
-            }
+            persistJugadorId(codigo, resp.jugadorId);
 
             // expose jugadorId to consumers via setJugadorId side-effect if provided
             // (the page sets it via hook.setJugadorId)
@@ -448,7 +411,7 @@ export function usePartida(codigoPartida?: string) {
       } catch (reErr) {
         console.warn('[usePartida] Reconectar failed (continuando):', reErr);
       }
-      await websocketService.subscribeToPartida(codigo, (evento: EventoWebSocket) => {
+      const handleIncomingEvento = (evento: EventoWebSocket) => {
         // Validar que el evento existe y tiene tipo
         if (!evento || !evento.tipo) {
           console.error('❌ Evento inválido recibido:', evento);
@@ -499,33 +462,41 @@ export function usePartida(codigoPartida?: string) {
               
               if (localJugadorId) {
                 const foundInList = jugadoresFinales.some((j: any) => String(j.id) === String(localJugadorId));
-                
+
                 if (!foundInList) {
-                  console.warn('[usePartida WS] Jugador local NO en jugadores[], agregando:', localJugadorId);
-                  
-                  // Si tenemos miJugador en datos, usarlo; si no, crear uno básico
-                  const miJugadorData = datos.miJugador || prev?.miJugador;
-                  
-                  if (miJugadorData) {
-                    const miJugadorPublic = {
-                      id: miJugadorData.id || localJugadorId,
-                      nombre: miJugadorData.nombre || 'Yo',
-                      numeroCartas: miJugadorData.numeroCartas || 0,
-                      orden: jugadoresFinales.length,
-                      conectado: true,
-                    };
-                    jugadoresFinales = [miJugadorPublic, ...jugadoresFinales];
+                  // If the server reports the partida is EN_CURSO and doesn't include our player
+                  // (and doesn't provide miJugador), we should NOT auto-add the player because
+                  // that likely means the player was removed/expulsed. Let the consumer (page)
+                  // handle redirection in that case.
+                  const servidorEnCurso = (datos && datos.estado === 'EN_CURSO') || prev?.estado === 'EN_CURSO';
+                  const tieneMiJugador = !!(datos && datos.miJugador);
+
+                  if (servidorEnCurso && !tieneMiJugador) {
+                    console.warn('[usePartida WS] Jugador local NO en jugadores[] y partida EN_CURSO — no añadir (posible expulsión)');
+                    // Keep jugadoresFinales as-is (without adding local player)
                   } else {
-                    // Crear jugador básico si no tenemos miJugador
-                    const user = authService.getCurrentUser();
-                    const jugadorBasico = {
-                      id: localJugadorId,
-                      nombre: user?.username || 'Yo',
-                      numeroCartas: 0,
-                      orden: jugadoresFinales.length,
-                      conectado: true,
-                    };
-                    jugadoresFinales = [jugadorBasico, ...jugadoresFinales];
+                    // Safe to add the local player representation when not in EN_CURSO
+                    const miJugadorData = datos.miJugador || prev?.miJugador;
+                    if (miJugadorData) {
+                      const miJugadorPublic = {
+                        id: miJugadorData.id || localJugadorId,
+                        nombre: miJugadorData.nombre || 'Yo',
+                        numeroCartas: miJugadorData.numeroCartas || 0,
+                        orden: jugadoresFinales.length,
+                        conectado: true,
+                      };
+                      jugadoresFinales = [miJugadorPublic, ...jugadoresFinales];
+                    } else {
+                      const user = authService.getCurrentUser();
+                      const jugadorBasico = {
+                        id: localJugadorId,
+                        nombre: user?.username || 'Yo',
+                        numeroCartas: 0,
+                        orden: jugadoresFinales.length,
+                        conectado: true,
+                      };
+                      jugadoresFinales = [jugadorBasico, ...jugadoresFinales];
+                    }
                   }
                 }
               }
@@ -603,7 +574,10 @@ export function usePartida(codigoPartida?: string) {
             };
           });
         }
-      });
+      
+      };
+
+      await websocketService.subscribeToPartida(codigo, handleIncomingEvento);
 
       setConectado(true);
       // After subscribing, if we don't receive a canonical Partida with jugadores quickly,

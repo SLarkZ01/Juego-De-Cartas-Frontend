@@ -24,7 +24,18 @@ export default function LoginForm() {
 
     try {
       await login(formData);
-      // Redirigir directamente a /jugar después de login exitoso
+      // Tras login exitoso, intentar reconexión automática a una partida en espera
+      try {
+        const mod = await import('@/hooks/useAutoReconnectAfterLogin');
+        const tryAutoReconnectAfterLogin = mod.tryAutoReconnectAfterLogin;
+        const reconnected = await tryAutoReconnectAfterLogin(router as any);
+        if (reconnected) return; // la función ya redirigió a la partida
+      } catch (e) {
+        // Si falla el intento de reconexión automática, continuar al lobby
+        console.warn('[LoginForm] tryAutoReconnectAfterLogin falló o no disponible:', e);
+      }
+
+      // Redirigir al listado por defecto
       router.push('/jugar');
     } catch (err: any) {
       setError(err.message || 'Error al iniciar sesión');

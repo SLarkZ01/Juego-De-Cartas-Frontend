@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLobbyRealTime } from '@/hooks/useLobbyRealTime';
@@ -16,6 +16,7 @@ import LobbyInfo from '@/components/lobby/LobbyInfo';
 import EventsList from '@/components/lobby/EventsList';
 import Modal from '@/components/ui/Modal';
 import Toast from '@/components/ui/Toast';
+import { useGameWebSocket } from '@/hooks/useGameWebSocket';
 
 export default function PartidaPage() {
   const params = useParams();
@@ -95,7 +96,8 @@ export default function PartidaPage() {
         // Primero, intentar recuperar jugadorId guardado
         let currentJugadorId = undefined;
         try {
-          currentJugadorId = localStorage.getItem(`jugadorId_${codigo}`) || undefined;
+          const { readJugadorId } = await import('@/lib/partidaUtils');
+          currentJugadorId = readJugadorId(codigo) || undefined;
           console.log('[page init] jugadorId recuperado de localStorage:', currentJugadorId);
         } catch (e) {
           console.warn('No se pudo leer jugadorId de localStorage en init:', e);
@@ -143,6 +145,23 @@ export default function PartidaPage() {
         // Cargar cartas disponibles
         const cartas = await cartaService.obtenerCartas();
         setCartasDisponibles(cartas);
+        
+        // Intentar unirse (idempotente) para forzar reconexión en el backend.
+        try {
+          console.log('[page init] intentando unirsePartida para asegurar reconexión...');
+          const resp = await partidaService.unirsePartida(codigo);
+          if (resp && resp.jugadorId) {
+            setJugadorId(resp.jugadorId);
+            try { localStorage.setItem(`jugadorId_${codigo}`, resp.jugadorId); } catch (e) {}
+            // Si el servidor devolvió estado, aplicarlo
+            if ((resp as any).jugadores) {
+              try { await cargarDetalle(codigo, resp.jugadorId || undefined); } catch (e) { /* ignore */ }
+            }
+          }
+        } catch (joinErr) {
+          // Si falla, usePartida ya implementa fallback/recovery; sólo logueamos
+          console.warn('[page init] unirsePartida falló (puede estar ya conectado):', joinErr);
+        }
       } catch (err) {
         console.error('Error inicializando partida:', err);
       }
@@ -208,6 +227,50 @@ export default function PartidaPage() {
       return () => clearTimeout(timer);
     }
   }, [eventos]);
+
+  // Manejar mensajes entrantes desde WS (hook ligero)
+  const handleWsMessage = useCallback(async (payload: any) => {
+    try {
+      // If backend explicitly marks partida as eliminated, handle it
+      if (payload && (payload.eliminada === true || payload?.partida?.eliminada === true)) {
+        console.warn('[handleWsMessage] payload indicates partida eliminada');
+        handlePartidaEliminada();
+        return;
+      }
+
+      // If payload is a PartidaResponse-like object and DOES NOT include our jugador in jugadores,
+      // and the partida is EN_CURSO, treat as possible expulsion and redirect via handlePartidaEliminada.
+      try {
+        const jugadoresArr = payload?.jugadores || payload?.partida?.jugadores || payload?.datos?.jugadores;
+        const estado = payload?.estado || payload?.partida?.estado || payload?.datos?.estado || partida?.estado;
+
+        if (estado === 'EN_CURSO' && Array.isArray(jugadoresArr)) {
+          const meId = jugadorId;
+          if (meId && !jugadoresArr.some((j: any) => String(j.id) === String(meId))) {
+            console.warn('[handleWsMessage] payload indicates our player is not present in jugadores during EN_CURSO — treating as expulsion');
+            handlePartidaEliminada();
+            return;
+          }
+        }
+      } catch (e) {
+        // ignore payload parsing errors and continue
+      }
+      // Si payload parece un PartidaResponse completo, recargar detalle
+      if (payload && (payload.jugadores || payload.miJugador || payload.codigo)) {
+        try {
+          await cargarDetalle(codigo, jugadorId || undefined);
+        } catch (e) {
+          // fallback: si cargarDetalle falla, intentar setear parta directo
+          console.warn('[handleWsMessage] cargarDetalle falló, ignorando:', e);
+        }
+      }
+    } catch (e) {
+      console.warn('[handleWsMessage] error procesando payload ws:', e);
+    }
+  }, [cargarDetalle, codigo, jugadorId]);
+
+  // Activar hook de WebSocket (también registrará al jugador con /app/partida/registrar)
+  useGameWebSocket(codigo || null, handleWsMessage);
 
   if (!isAuthenticated) return null;
 
