@@ -86,6 +86,32 @@ export function usePartida(codigoPartida?: string) {
       return response;
     } catch (err: any) {
       const errorMsg = err.message || 'Error al unirse a la partida';
+
+      // Si el backend responde que "ya estás en la partida" (o mensaje similar),
+      // tratarlo como caso de reconexión: obtener el estado actual de la partida
+      // y devolverlo para permitir la navegación.
+      try {
+        if (/ya est|ya estás|ya estas|already/i.test(errorMsg)) {
+          console.warn('[usePartida.unirsePartida] Backend indica que el jugador ya está en la partida. Intentando fallback con obtenerPartida...', errorMsg);
+          const fallback = await partidaService.obtenerPartida(codigo);
+          if (fallback && fallback.jugadorId) {
+            setJugadorIdRef(fallback.jugadorId);
+            try {
+              localStorage.setItem(`jugadorId_${codigo}`, fallback.jugadorId);
+            } catch (e) {
+              console.warn('[usePartida.unirsePartida] No se pudo persistir jugadorId tras fallback:', e);
+            }
+          }
+
+          // Limpiar error y devolver el fallback como éxito
+          setError(null);
+          return fallback as PartidaResponse;
+        }
+      } catch (fallbackErr) {
+        console.warn('[usePartida.unirsePartida] Fallback obtenerPartida falló:', fallbackErr);
+        // continuar y propagar el error original abajo
+      }
+
       setError(errorMsg);
       throw new Error(errorMsg);
     } finally {
