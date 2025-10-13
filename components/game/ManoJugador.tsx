@@ -26,6 +26,9 @@ interface ManoJugadorProps {
   mostrarMini?: boolean; // vista compacta cuando hay muchas cartas
   className?: string;
   onOrderChange?: (newOrder: string[]) => void; // opcional: notifica reordenación
+  controlledOrder?: string[]; // si se pasa, ManoJugador se convierte en controlada
+  externalDnd?: boolean; // si true, DndContext lo crea el padre
+  onDropToMesa?: (codigo: string) => void; // callback cuando se suelta sobre la mesa
 }
 
 /**
@@ -41,24 +44,42 @@ export default function ManoJugador({
   mostrarMini = false,
   className = '',
   onOrderChange,
+  controlledOrder,
+  externalDnd = false,
+  onDropToMesa,
 }: ManoJugadorProps) {
-  const [order, setOrder] = useState<string[]>(cartasCodigos || []);
+  const [order, setOrder] = useState<string[]>(controlledOrder ?? cartasCodigos ?? []);
 
   useEffect(() => {
-    setOrder(cartasCodigos || []);
-  }, [cartasCodigos]);
+    if (controlledOrder) {
+      setOrder(controlledOrder);
+    } else {
+      setOrder(cartasCodigos || []);
+    }
+  }, [cartasCodigos, controlledOrder]);
 
-  const sensors = useSensors(useSensor(PointerSensor));
+  // Always call hooks in the same order. Use internalSensors when this component creates its own DndContext.
+  const internalPointerSensor = useSensor(PointerSensor);
+  const internalSensors = useSensors(internalPointerSensor);
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleInternalDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over) return;
+    // drop sobre la mesa -> delegado a onDropToMesa si existe
+    if (over.id === 'mesa') {
+      onDropToMesa?.(active.id as string);
+      return;
+    }
     const oldIndex = order.indexOf(active.id as string);
     const newIndex = order.indexOf(over.id as string);
     if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
       const next = arrayMove(order, oldIndex, newIndex);
-      setOrder(next);
-      onOrderChange?.(next);
+      if (controlledOrder) {
+        onOrderChange?.(next);
+      } else {
+        setOrder(next);
+        onOrderChange?.(next);
+      }
     }
   };
 
@@ -78,7 +99,8 @@ export default function ManoJugador({
       </div>
 
       <div className="relative">
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        {externalDnd ? (
+          // El padre provee DndContext y onDragEnd; aquí solo renderizamos SortableContext
           <SortableContext items={order} strategy={horizontalListSortingStrategy}>
             <div className="flex gap-3 overflow-x-auto px-2 py-3 scrollbar-hide">
               {order.map((codigo) => {
@@ -103,7 +125,34 @@ export default function ManoJugador({
               })}
             </div>
           </SortableContext>
-        </DndContext>
+        ) : (
+          <DndContext sensors={internalSensors} collisionDetection={closestCenter} onDragEnd={handleInternalDragEnd}>
+            <SortableContext items={order} strategy={horizontalListSortingStrategy}>
+              <div className="flex gap-3 overflow-x-auto px-2 py-3 scrollbar-hide">
+                {order.map((codigo) => {
+                  const carta = cartasDB[codigo];
+                  const fallbackCarta = {
+                    codigo,
+                    nombre: codigo,
+                    imagenUrl: undefined,
+                    atributos: {},
+                  } as any;
+
+                  return (
+                    <SortableCard
+                      key={codigo}
+                      id={codigo}
+                      mostrarMini={mostrarMini}
+                      onClick={() => onJugarCarta?.(codigo)}
+                    >
+                      <CartaComponent carta={carta || fallbackCarta} className="w-full" />
+                    </SortableCard>
+                  );
+                })}
+              </div>
+            </SortableContext>
+          </DndContext>
+        )}
 
         {/* overlay: cuando hay muchas cartas se puede mostrar un botón para compactar / ver todo */}
       </div>
@@ -122,10 +171,15 @@ function SortableCard({ id, children, mostrarMini, onClick }: any) {
   return (
     <div
       ref={setNodeRef}
-      style={style}
       {...attributes}
       {...listeners}
       className={`flex-shrink-0 ${mostrarMini ? 'w-24' : 'w-40'} ${isDragging ? 'scale-105 z-50' : ''}`}
+      // hide original while dragging so overlay is the only visible instance
+      aria-hidden={isDragging}
+      style={{
+        ...style,
+        visibility: isDragging ? 'hidden' : undefined,
+      }}
       onClick={onClick}
       role={onClick ? 'button' : undefined}
       tabIndex={0}
