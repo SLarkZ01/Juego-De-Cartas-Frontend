@@ -11,8 +11,10 @@ import { partidaService, cartaService } from '@/services/partida.service';
 import { gameplayService } from '@/services/partida.service';
 import { useLobbyRealTime } from '@/hooks/useLobbyRealTime';
 import { readJugadorId, persistJugadorId } from '@/lib/partidaUtils';
-import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { DndContext, DragOverlay, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { restrictToWindowEdges } from '@dnd-kit/modifiers';
 import CartaComponent from '@/components/game/CartaComponent';
+import { createPortal } from 'react-dom';
 import { arrayMove } from '@dnd-kit/sortable';
 import Toast from '@/components/ui/Toast';
 
@@ -28,10 +30,14 @@ export default function JuegoPage() {
   const [manoOrder, setManoOrder] = useState<string[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const lastPlayedRef = React.useRef<string | null>(null);
+  const [overlayPos, setOverlayPos] = useState<{ x: number; y: number } | null>(null);
+  const dragStartPointer = React.useRef<{ x: number; y: number } | null>(null);
 
   // DnD sensors must be created at top-level so hook order doesn't change between renders
-  const pointerSensor = useSensor(PointerSensor);
-  const sensors = useSensors(pointerSensor);
+  // require a small movement before activating drag to avoid jumps on different screen scalings
+  const pointerSensor = useSensor(PointerSensor, { activationConstraint: { distance: 6 } });
+  const touchSensor = useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } });
+  const sensors = useSensors(pointerSensor, touchSensor);
 
   // Hook WS para lista de jugadores (reutiliza lógica existente)
   const { jugadores: jugadoresLobby, connected, registerSession } = useLobbyRealTime(codigo, jugadorId);
@@ -164,15 +170,64 @@ export default function JuegoPage() {
             <main className="lg:col-span-3 space-y-6">
               <DndContext
                 sensors={sensors}
+                modifiers={[restrictToWindowEdges]}
                 onDragStart={(event) => {
                   setActiveId(event.active.id as string);
+                  // record pointer start if available
+                  try {
+                    const act: any = (event as any).activatorEvent;
+                    const clientX = act?.clientX ?? (act?.nativeEvent ? act.nativeEvent.clientX : undefined);
+                    const clientY = act?.clientY ?? (act?.nativeEvent ? act.nativeEvent.clientY : undefined);
+                    if (typeof clientX === 'number' && typeof clientY === 'number') {
+                      dragStartPointer.current = { x: clientX, y: clientY };
+                      // compute pointer offset relative to the dragged element's bounding rect
+                      try {
+                        const el = document.querySelector(`[data-draggable-id="${event.active.id}"]`) as HTMLElement | null;
+                        if (el) {
+                          const rect = el.getBoundingClientRect();
+                          const offsetX = clientX - rect.left;
+                          const offsetY = clientY - rect.top;
+                          (dragStartPointer as any).currentOffset = { x: offsetX, y: offsetY };
+                          setOverlayPos({ x: clientX - offsetX, y: clientY - offsetY });
+                        } else {
+                          setOverlayPos({ x: clientX, y: clientY });
+                        }
+                      } catch (e) {
+                        setOverlayPos({ x: clientX, y: clientY });
+                      }
+                    }
+                  } catch (e) {
+                    dragStartPointer.current = null;
+                    setOverlayPos(null);
+                  }
                 }}
-                onDragOver={(event) => {
-                  // opcional: manejar swapping mientras se arrastra
+                onDragMove={(event) => {
+                  try {
+                    const delta: any = (event as any).delta;
+                    if (dragStartPointer.current && delta) {
+                      const baseX = dragStartPointer.current.x + (delta.x ?? 0);
+                      const baseY = dragStartPointer.current.y + (delta.y ?? 0);
+                      const offset = (dragStartPointer as any).currentOffset;
+                      if (offset) {
+                        setOverlayPos({ x: baseX - offset.x, y: baseY - offset.y });
+                      } else {
+                        setOverlayPos({ x: baseX, y: baseY });
+                      }
+                    } else {
+                      // fallback to activatorEvent coords
+                      const act: any = (event as any).activatorEvent;
+                      const clientX = act?.clientX ?? (act?.nativeEvent ? act.nativeEvent.clientX : undefined);
+                      const clientY = act?.clientY ?? (act?.nativeEvent ? act.nativeEvent.clientY : undefined);
+                      if (typeof clientX === 'number' && typeof clientY === 'number') setOverlayPos({ x: clientX, y: clientY });
+                    }
+                  } catch (e) {
+                    // ignore
+                  }
                 }}
                 onDragEnd={async (event) => {
                   const { active, over } = event;
                   setActiveId(null);
+                  setOverlayPos(null);
                   if (!over) return;
 
                   // si se soltó sobre otra carta, reordenar

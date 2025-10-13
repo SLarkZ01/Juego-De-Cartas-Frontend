@@ -7,10 +7,12 @@ import {
   DndContext,
   closestCenter,
   PointerSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   DragEndEvent,
 } from '@dnd-kit/core';
+import { restrictToWindowEdges } from '@dnd-kit/modifiers';
 import {
   arrayMove,
   SortableContext,
@@ -59,8 +61,9 @@ export default function ManoJugador({
   }, [cartasCodigos, controlledOrder]);
 
   // Always call hooks in the same order. Use internalSensors when this component creates its own DndContext.
-  const internalPointerSensor = useSensor(PointerSensor);
-  const internalSensors = useSensors(internalPointerSensor);
+  const internalPointerSensor = useSensor(PointerSensor, { activationConstraint: { distance: 6 } });
+  const internalTouchSensor = useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } });
+  const internalSensors = useSensors(internalPointerSensor, internalTouchSensor);
 
   const handleInternalDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -102,7 +105,7 @@ export default function ManoJugador({
         {externalDnd ? (
           // El padre provee DndContext y onDragEnd; aquí solo renderizamos SortableContext
           <SortableContext items={order} strategy={horizontalListSortingStrategy}>
-            <div className="flex gap-3 overflow-x-auto px-2 py-3 scrollbar-hide">
+            <div className="flex gap-3 overflow-x-auto px-2 py-3 scrollbar-hide" style={{ touchAction: 'none' }}>
               {order.map((codigo) => {
                 const carta = cartasDB[codigo];
                 const fallbackCarta = {
@@ -126,9 +129,9 @@ export default function ManoJugador({
             </div>
           </SortableContext>
         ) : (
-          <DndContext sensors={internalSensors} collisionDetection={closestCenter} onDragEnd={handleInternalDragEnd}>
+          <DndContext sensors={internalSensors} modifiers={[restrictToWindowEdges]} collisionDetection={closestCenter} onDragEnd={handleInternalDragEnd}>
             <SortableContext items={order} strategy={horizontalListSortingStrategy}>
-              <div className="flex gap-3 overflow-x-auto px-2 py-3 scrollbar-hide">
+              <div className="flex gap-3 overflow-x-auto px-2 py-3 scrollbar-hide" style={{ touchAction: 'none' }}>
                 {order.map((codigo) => {
                   const carta = cartasDB[codigo];
                   const fallbackCarta = {
@@ -171,6 +174,7 @@ function SortableCard({ id, children, mostrarMini, onClick }: any) {
   return (
     <div
       ref={setNodeRef}
+      data-draggable-id={id}
       {...attributes}
       {...listeners}
       className={`flex-shrink-0 ${mostrarMini ? 'w-24' : 'w-40'} ${isDragging ? 'scale-105 z-50' : ''}`}
