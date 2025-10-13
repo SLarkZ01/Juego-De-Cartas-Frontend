@@ -10,7 +10,7 @@ const REGISTRATION_ATTEMPTS = 3;
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
 async function publishRegistrationWithRetry(client: Client, codigoPartida: string, jugadorId: string) {
-  let lastErr: any = null;
+  let lastErr: unknown = null;
   for (let attempt = 1; attempt <= REGISTRATION_ATTEMPTS; attempt++) {
     try {
       client.publish({
@@ -23,9 +23,9 @@ async function publishRegistrationWithRetry(client: Client, codigoPartida: strin
       // Wait briefly to allow backend to register mapping before subscription
       await sleep(REGISTRATION_DELAY_MS);
       return;
-    } catch (e) {
-      lastErr = e;
-      console.warn(`⚠️ Error publicando registro (attempt ${attempt}):`, e);
+    } catch (err) {
+      lastErr = err;
+      console.warn(`⚠️ Error publicando registro (attempt ${attempt}):`, err);
       // backoff before retrying
       if (attempt < REGISTRATION_ATTEMPTS) await sleep(100 * attempt);
     }
@@ -147,9 +147,9 @@ export class WebSocketService {
         if (jugadorIdToRegister && this.client && this.client.active) {
           try {
             await publishRegistrationWithRetry(this.client, codigoPartida, jugadorIdToRegister);
-          } catch (e) {
-            console.warn('⚠️ No se pudo publicar registro de jugador en WS (suscripción) tras reintentos:', e);
-          }
+          } catch {
+            console.warn('⚠️ No se pudo publicar registro de jugador en WS (suscripción) tras reintentos');
+                }
         }
       }
     } catch (regErr) {
@@ -168,20 +168,20 @@ export class WebSocketService {
         if (process.env.NODE_ENV === 'development') {
           try {
             console.log('WS raw body snippet:', raw.trim().slice(0, 300));
-          } catch (e) {
+          } catch {
             // ignore
           }
         }
 
-        let parsed: any = null;
+  let parsed: unknown = null;
         try {
           parsed = JSON.parse(raw);
         } catch (parseErr) {
-          console.warn('⚠️ No se pudo parsear body WS como JSON, ignorando frame. Raw:', raw.slice(0, 200));
+          console.warn('⚠️ No se pudo parsear body WS como JSON, ignorando frame. parseErr:', parseErr, 'Raw snippet:', raw.slice(0, 200));
           return;
         }
 
-        const evento: EventoWebSocket = parsed as EventoWebSocket;
+  const evento: EventoWebSocket = parsed as EventoWebSocket;
 
         if (!evento || typeof evento !== 'object') {
           console.warn('⚠️ Evento WS parseado no es un objeto, ignorando:', evento);
@@ -220,15 +220,15 @@ export class WebSocketService {
             try {
               await sleep(400);
               await publishRegistrationWithRetry(this.client!, codigoPartida, jugadorIdToRegister);
-            } catch (e) {
-              console.warn('⚠️ Re-intento de registro 1 falló:', e);
+            } catch {
+              console.warn('⚠️ Re-intento de registro 1 falló');
             }
 
             try {
               await sleep(800);
               await publishRegistrationWithRetry(this.client!, codigoPartida, jugadorIdToRegister);
-            } catch (e) {
-              console.warn('⚠️ Re-intento de registro 2 falló:', e);
+            } catch {
+              console.warn('⚠️ Re-intento de registro 2 falló');
             }
           })();
         }
@@ -248,7 +248,7 @@ export class WebSocketService {
     for (const d of delays) {
       setTimeout(() => {
         try {
-          const payload: any = { accion: 'SOLICITAR_ESTADO' };
+          const payload: Record<string, unknown> = { accion: 'SOLICITAR_ESTADO' };
           if (jugadorId) payload.jugadorId = jugadorId;
           this.client!.publish({
             destination: `/app/partida/${codigoPartida}/accion`,
@@ -256,8 +256,8 @@ export class WebSocketService {
             skipContentLengthHeader: true,
           });
           if (process.env.NODE_ENV === 'development') console.log(`📤 SOLICITAR_ESTADO enviado para ${codigoPartida} (delay ${d}ms)`);
-        } catch (e) {
-          console.warn('⚠️ Error enviando SOLICITAR_ESTADO:', e);
+        } catch (err) {
+          console.warn('⚠️ Error enviando SOLICITAR_ESTADO:', err);
         }
       }, d);
     }
@@ -279,7 +279,7 @@ export class WebSocketService {
             skipContentLengthHeader: true,
           });
           if (process.env.NODE_ENV === 'development') console.log(`📤 aggressive register ${i + 1}/${rounds} for ${jugadorId}`);
-        } catch (e) {
+        } catch {
           // don't throw from aggressive attempts
         }
       }, i * intervalMs);
@@ -368,7 +368,7 @@ export function crearClienteStomp(brokerUrl?: string): Client {
 
 export function conectarYSuscribir(
   codigoPartida: string,
-  onMessage: (payload: any) => void
+  onMessage: (payload: EventoWebSocket) => void
 ): Client {
   const client = crearClienteStomp();
 
@@ -403,7 +403,7 @@ export function conectarYSuscribir(
       try {
         const raw = msg.body;
         if (!raw || typeof raw !== 'string' || raw.trim().length === 0) return;
-        let parsed: any = null;
+        let parsed: unknown = null;
         try {
           parsed = JSON.parse(raw);
         } catch (e) {
@@ -411,11 +411,11 @@ export function conectarYSuscribir(
           return;
         }
         // Guardar validación ligera
-        if (!parsed || typeof parsed !== 'object' || !parsed.tipo) {
+        if (!parsed || typeof parsed !== 'object' || !('tipo' in parsed)) {
           console.warn('⚠️ Mensaje WS (helper) inválido o sin tipo, ignorando:', parsed);
           return;
         }
-        onMessage(parsed);
+        onMessage(parsed as EventoWebSocket);
       } catch (e) {
         console.error('Error procesando mensaje WS (helper):', e);
       }

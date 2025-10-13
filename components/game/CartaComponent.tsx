@@ -6,14 +6,12 @@ import type { Carta } from '@/types/api';
 interface CartaComponentProps {
   carta: Carta;
   mostrarAtributos?: boolean;
-  atributoSeleccionado?: string;
   className?: string;
 }
 
 export default function CartaComponent({ 
   carta, 
   mostrarAtributos = true,
-  atributoSeleccionado,
   className = '' 
 }: CartaComponentProps) {
   // Posiciones aproximadas para los 4 atributos en la plantilla `public/CartaNormal.webp`.

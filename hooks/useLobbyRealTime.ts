@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import SockJS from 'sockjs-client';
 import { Client, IMessage } from '@stomp/stompjs';
 import api from '@/lib/api';
+import type { EventoWebSocket } from '@/types/api';
 
 export interface JugadorDTO {
   id: string;
@@ -25,8 +26,8 @@ export function useLobbyRealTime(
   partidaCodigo: string | null,
   jugadorId?: string | null,
   onPartidaEliminada?: () => void,
-  onPartidaMessage?: (payload: any) => void,
-  onCountsMessage?: (payload: any) => void,
+  onPartidaMessage?: (payload: EventoWebSocket) => void,
+  onCountsMessage?: (payload: Record<string, number> | Record<string, unknown>) => void,
 ) {
   const clientRef = useRef<Client | null>(null);
   const [jugadores, setJugadores] = useState<JugadorDTO[]>([]);
@@ -81,13 +82,16 @@ export function useLobbyRealTime(
             if (!mounted) return;
             
             try {
-              const payload = JSON.parse(msg.body);
-              console.log('[useLobbyRealTime] Mensaje recibido:', payload);
-              if (onPartidaMessage) {
-                try { onPartidaMessage(payload); } catch (e) { console.warn('[useLobbyRealTime] onPartidaMessage error', e); }
+              const parsed: unknown = JSON.parse(msg.body);
+              console.log('[useLobbyRealTime] Mensaje recibido (raw parsed):', parsed);
+              // si el callback existe y el mensaje tiene estructura compatible, llamarlo
+              if (onPartidaMessage && parsed && typeof parsed === 'object') {
+                try { onPartidaMessage(parsed as EventoWebSocket); } catch (e) { console.warn('[useLobbyRealTime] onPartidaMessage error', e); }
               }
               // Handle partida eliminada only when backend explicitly sends eliminada === true
-              if (payload && payload.eliminada === true) {
+              const payload = parsed as Record<string, unknown>;
+              const maybeEliminada = payload['eliminada'];
+              if (maybeEliminada === true) {
                 console.warn('[useLobbyRealTime] Partida marcada como eliminada en WS payload');
                 // limpiar lista local y avisar al consumidor
                 setJugadores([]);
@@ -97,21 +101,34 @@ export function useLobbyRealTime(
               }
 
               // El servidor envía un PartidaResponse con { codigo, jugadorId, jugadores }
-              if (payload && Array.isArray(payload.jugadores)) {
-                console.log('[useLobbyRealTime] Actualizando jugadores:', payload.jugadores);
-                setJugadores(payload.jugadores);
-                setLoading(false);
-              } else if (payload.partida && Array.isArray(payload.partida.jugadores)) {
-                // Algunos eventos anidan la partida
-                console.log('[useLobbyRealTime] Actualizando jugadores (nested):', payload.partida.jugadores);
-                setJugadores(payload.partida.jugadores);
-                setLoading(false);
-              } else if (payload.datos && Array.isArray(payload.datos.jugadores)) {
-                // Eventos WebSocket con estructura { tipo, datos, timestamp }
-                console.log('[useLobbyRealTime] Actualizando jugadores (datos):', payload.datos.jugadores);
-                setJugadores(payload.datos.jugadores);
+              const maybeJugadores = payload['jugadores'];
+              if (Array.isArray(maybeJugadores)) {
+                console.log('[useLobbyRealTime] Actualizando jugadores:', maybeJugadores);
+                setJugadores(maybeJugadores as JugadorDTO[]);
                 setLoading(false);
               } else {
+                const maybePartida = payload['partida'];
+                if (maybePartida && typeof maybePartida === 'object') {
+                  const nestedJugadores = (maybePartida as Record<string, unknown>)['jugadores'];
+                  if (Array.isArray(nestedJugadores)) {
+                    console.log('[useLobbyRealTime] Actualizando jugadores (nested):', nestedJugadores);
+                    setJugadores(nestedJugadores as JugadorDTO[]);
+                    setLoading(false);
+                    return;
+                  }
+                }
+
+                const maybeDatos = payload['datos'];
+                if (maybeDatos && typeof maybeDatos === 'object') {
+                  const datosJug = (maybeDatos as Record<string, unknown>)['jugadores'];
+                  if (Array.isArray(datosJug)) {
+                    console.log('[useLobbyRealTime] Actualizando jugadores (datos):', datosJug);
+                    setJugadores(datosJug as JugadorDTO[]);
+                    setLoading(false);
+                    return;
+                  }
+                }
+
                 console.warn('[useLobbyRealTime] Payload sin jugadores:', payload);
               }
             } catch (err) {
@@ -124,15 +141,15 @@ export function useLobbyRealTime(
             client.subscribe(`/topic/partida/${partidaCodigo}/counts`, (msg: IMessage) => {
               if (!mounted) return;
               try {
-                const payload = JSON.parse(msg.body);
-                if (onCountsMessage) {
-                  try { onCountsMessage(payload); } catch (e) { console.warn('[useLobbyRealTime] onCountsMessage error', e); }
+                const parsed: unknown = JSON.parse(msg.body);
+                if (onCountsMessage && parsed && typeof parsed === 'object') {
+                    try { onCountsMessage(parsed as Record<string, number>); } catch (err) { console.warn('[useLobbyRealTime] onCountsMessage error', err); }
                 }
-              } catch (e) {
-                console.warn('[useLobbyRealTime] error parsing counts payload', e);
+              } catch (err) {
+                console.warn('[useLobbyRealTime] error parsing counts payload', err);
               }
             });
-          } catch (e) {
+          } catch {
             // ignore if topic not available
           }
         },
@@ -172,8 +189,8 @@ export function useLobbyRealTime(
       const payload = { jugadorId: jId, partidaCodigo };
       client.publish({ destination: '/app/partida/registrar', body: JSON.stringify(payload), skipContentLengthHeader: true });
       if (process.env.NODE_ENV === 'development') console.log('[useLobbyRealTime] registerSession published', payload);
-    } catch (e) {
-      console.warn('[useLobbyRealTime] Error publishing registrar', e);
+    } catch (err) {
+      console.warn('[useLobbyRealTime] Error publishing registrar', err);
     }
   };
 

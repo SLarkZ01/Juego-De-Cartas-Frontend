@@ -19,7 +19,7 @@ export default function PartidaPage() {
   const router = useRouter();
   const codigo = params?.codigo as string;
 
-  const { user, isAuthenticated, loading: authLoading } = useAuth() as any;
+  const { isAuthenticated, loading: authLoading } = useAuth();
   const [jugadorId, setJugadorId] = useState<string | null>(null);
   
   // Handler cuando el backend notifica que la partida fue eliminada (creador salió)
@@ -40,11 +40,13 @@ export default function PartidaPage() {
 
   // Al recibir mensajes del topic principal, buscamos PARTIDA_INICIADA para cargar detalle privado
 
-  const handlePartidaMessage = useCallback(async (payload: any) => {
+  const handlePartidaMessage = useCallback(async (payload: unknown) => {
     try {
-      // Detectar evento de inicio
-      const tipo = payload?.event || payload?.tipo || payload?.eventType || (payload?.datos && payload.datos.event);
-      if (tipo === 'PARTIDA_INICIADA' || (payload && payload.turnoActual)) {
+      // Detectar evento de inicio (trabajamos con unknown -> guardas y casteos seguros)
+      const p = (payload && typeof payload === 'object') ? (payload as Record<string, unknown>) : {};
+      const tipo = (p?.event as string | undefined) || (p?.tipo as string | undefined) || (p?.eventType as string | undefined) || ((p?.datos && (p.datos as Record<string, unknown>)?.event) as string | undefined);
+  const hasTurno = 'turnoActual' in p && (p as Record<string, unknown>).turnoActual;
+  if (tipo === 'PARTIDA_INICIADA' || hasTurno) {
         // Redirigir a la ruta del juego cuando la partida comience
         setToastMessage('Partida iniciada — redirigiendo al juego...');
         try {
@@ -53,10 +55,10 @@ export default function PartidaPage() {
           console.warn('[handlePartidaMessage] error redirigiendo al juego', e);
         }
       }
-    } catch (e) {
-      console.warn('[handlePartidaMessage] error procesando mensaje', e);
+    } catch (err) {
+      console.warn('[handlePartidaMessage] error procesando mensaje', err);
     }
-  }, [codigo, jugadorId]);
+  }, [codigo, router]);
 
   // Hook específico para el lobby en tiempo real (ahora con callback para partida eliminada and partida messages)
   const { jugadores: jugadoresLobby, connected: lobbyConnected, loading: lobbyLoading, registerSession } = useLobbyRealTime(codigo, jugadorId, handlePartidaEliminada, handlePartidaMessage);
@@ -110,7 +112,7 @@ export default function PartidaPage() {
             const resp = await partidaService.reconectarPartida(codigo);
             if (resp && resp.jugadorId) {
               setJugadorId(resp.jugadorId);
-              try { persistJugadorId(codigo, resp.jugadorId); } catch (e) {}
+              try { persistJugadorId(codigo, resp.jugadorId); } catch { }
             }
           } catch (reErr) {
             console.warn('[page init] reconectarPartida falló:', reErr);
@@ -121,13 +123,12 @@ export default function PartidaPage() {
       }
     };
 
-    init();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  init();
   }, [codigo]);
 
   useEffect(() => {
     if (jugadorId && codigo) {
-      try { persistJugadorId(codigo, jugadorId); } catch (e) {}
+      try { persistJugadorId(codigo, jugadorId); } catch { }
     }
   }, [jugadorId, codigo]);
 
@@ -146,13 +147,14 @@ export default function PartidaPage() {
 
     try {
       await partidaService.salirPartida(codigo);
-      try { persistJugadorId(codigo, ''); } catch (e) { /* ignore */ }
+        try { persistJugadorId(codigo, ''); } catch { /* ignore */ }
 
       setToastMessage('Has salido de la partida. Volviendo al listado...');
       setTimeout(() => router.push('/jugar'), 1200);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error saliendo de la partida:', err);
-      setToastMessage(err?.message || 'Error al salir de la partida');
+      const msg = err instanceof Error ? err.message : String(err || 'Error al salir de la partida');
+      setToastMessage(msg);
     }
   };
 
@@ -179,12 +181,13 @@ export default function PartidaPage() {
       await partidaService.iniciarPartida(codigo);
   // Si el POST es exitoso, redirigir inmediatamente al juego (el backend publicará el evento también)
   setToastMessage('Solicitud de inicio enviada — yendo al juego...');
-  try { router.push(`/partida/${codigo}/juego`); } catch(e) { /* ignore */ }
-    } catch (err: any) {
-      console.error('Error iniciando partida:', err);
-      setToastMessage(err?.message || 'Error al iniciar partida');
-      setStarting(false);
-    }
+  try { router.push(`/partida/${codigo}/juego`); } catch { /* ignore */ }
+      } catch (err: unknown) {
+        console.error('Error iniciando partida:', err);
+        const msg = err instanceof Error ? err.message : String(err || 'Error al iniciar partida');
+        setToastMessage(msg);
+        setStarting(false);
+      }
   };
 
   // Log para diagnóstico (lobby-focused)
@@ -193,7 +196,7 @@ export default function PartidaPage() {
       partidaCodigo: codigo,
       jugadoresCount: jugadoresLobby.length || 0,
       jugadorIdLocal: jugadorId,
-      jugadores: jugadoresLobby.map(j => ({ id: j.id, nombre: j.nombre })),
+            jugadores: jugadoresLobby.map(j => ({ id: j.id, nombre: j.nombre })),
     });
   }
 
@@ -243,7 +246,7 @@ export default function PartidaPage() {
 
             {/* Lista de jugadores */}
             {lobbyConnected && jugadoresLobby.length > 0 && (
-              <PlayersList jugadores={jugadoresLobby as any} partidaTurno={undefined} />
+              <PlayersList jugadores={jugadoresLobby} partidaTurno={undefined} />
             )}
 
             <LobbyInfo partidaEstado={'ESPERANDO'} jugadoresLobbyCount={jugadoresLobby.length} puedesIniciar={jugadoresLobby.length > 0 && jugadoresLobby[0].id === jugadorId} onIniciar={handleStartGame} starting={starting} />

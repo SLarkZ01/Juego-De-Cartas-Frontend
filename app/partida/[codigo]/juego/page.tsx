@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useEffect, useState, useRef } from 'react';
+import type { DragMoveEvent } from '@dnd-kit/core';
 import { useParams, useRouter } from 'next/navigation';
-import Image from 'next/image';
 import LobbyHeader from '@/components/lobby/LobbyHeader';
 import PlayersList from '@/components/lobby/PlayersList';
 import ManoJugador from '@/components/game/ManoJugador';
@@ -18,6 +18,7 @@ import CartaComponent from '@/components/game/CartaComponent';
 import { createPortal } from 'react-dom';
 import { arrayMove } from '@dnd-kit/sortable';
 import Toast from '@/components/ui/Toast';
+import type { Carta, PartidaDetailResponse, JugadorPublic } from '@/types/api';
 
 export default function JuegoPage() {
   const params = useParams();
@@ -25,17 +26,42 @@ export default function JuegoPage() {
   const codigo = params?.codigo as string;
 
   const [jugadorId, setJugadorId] = useState<string | null>(null);
-  const [detalle, setDetalle] = useState<any | null>(null);
-  const [cartasDB, setCartasDB] = useState<Record<string, any>>({});
+  const [detalle, setDetalle] = useState<PartidaDetailResponse | null>(null);
+  const [cartasDB, setCartasDB] = useState<Record<string, Carta>>({});
   const [toastMessage, setToastMessage] = useState<string>('');
+
+  // Helpers to avoid using `any` in touch/event parsing
+  type TouchLike = { length?: number; [index: number]: unknown };
+  const getFirstTouch = (touches: unknown): Record<string, unknown> | undefined => {
+    if (!touches) return undefined;
+    if (Array.isArray(touches) && touches.length > 0) return touches[0] as Record<string, unknown>;
+    if (typeof touches === 'object') {
+      const t = touches as TouchLike;
+      if (typeof t.length === 'number' && t.length > 0) {
+        return t[0] as Record<string, unknown>;
+      }
+    }
+    return undefined;
+  };
+
+  const getErrorMessage = (err: unknown, fallback = 'Error inesperado'): string => {
+    if (!err) return fallback;
+    if (typeof err === 'string') return err;
+    if (typeof err === 'object' && err !== null) {
+      const e = err as Record<string, unknown>;
+      if (typeof e.message === 'string') return e.message;
+      if (typeof e.error === 'string') return e.error;
+    }
+    return fallback;
+  };
   const [manoOrder, setManoOrder] = useState<string[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const lastPlayedRef = React.useRef<string | null>(null);
   const [overlayPos, setOverlayPos] = useState<{ x: number; y: number } | null>(null);
   // store pointer start, offset and element rect for precise overlay positioning on small screens
-  const dragStartPointer = React.useRef<any>(null);
+  const dragStartPointer = React.useRef<{ x: number; y: number; rect?: DOMRect; currentOffset?: { x: number; y: number } } | null>(null);
   // pointer tracker to follow actual pointer/touch coordinates during drag (RAF throttled)
-  const pointerTrackerRef = React.useRef<{ handler?: any; raf?: number | null }>({ handler: undefined, raf: null });
+  const pointerTrackerRef = React.useRef<{ handler?: (ev: PointerEvent | TouchEvent | MouseEvent) => void; raf?: number | null }>({ handler: undefined, raf: null });
 
   // DnD sensors must be created at top-level so hook order doesn't change between renders
   // require a small movement before activating drag to avoid jumps on different screen scalings
@@ -64,20 +90,24 @@ export default function JuegoPage() {
 
   // cleanup pointer tracker if component unmounts
   useEffect(() => {
+    // capture the current ref snapshot to avoid stale-ref warnings in the cleanup
+    const snapshot = pointerTrackerRef.current;
     return () => {
       try {
-        const handler = pointerTrackerRef.current.handler;
-        if (handler) {
-          window.removeEventListener('pointermove', handler);
-          window.removeEventListener('touchmove', handler);
-          window.removeEventListener('mousemove', handler);
-          pointerTrackerRef.current.handler = undefined;
+        const currentHandler = snapshot?.handler;
+        const currentRaf = snapshot?.raf;
+        if (currentHandler) {
+          window.removeEventListener('pointermove', currentHandler as EventListener);
+          window.removeEventListener('touchmove', currentHandler as EventListener);
+          window.removeEventListener('mousemove', currentHandler as EventListener);
+          // clear the shared ref
+          if (snapshot) snapshot.handler = undefined;
         }
-        if (pointerTrackerRef.current.raf) {
-          window.cancelAnimationFrame(pointerTrackerRef.current.raf as number);
-          pointerTrackerRef.current.raf = null;
+        if (currentRaf) {
+          window.cancelAnimationFrame(currentRaf as number);
+          if (snapshot) snapshot.raf = null;
         }
-      } catch (e) {
+      } catch {
         // ignore
       }
     };
@@ -86,14 +116,24 @@ export default function JuegoPage() {
   // Keep detalle.miJugador.numeroCartas in sync with miJugadorFromHook when counts arrive via WS
   useEffect(() => {
     try {
-      if (miJugadorFromHook && miJugadorFromHook.id && detalle && detalle.miJugador && detalle.miJugador.id === miJugadorFromHook.id) {
-        setDetalle((prev: any) => ({ ...prev, miJugador: { ...prev.miJugador, numeroCartas: miJugadorFromHook.numeroCartas ?? prev.miJugador.numeroCartas } }));
+      if (
+        miJugadorFromHook &&
+        miJugadorFromHook.id &&
+        detalle &&
+        detalle.miJugador &&
+        detalle.miJugador.id === miJugadorFromHook.id
+      ) {
+        setDetalle((prev) =>
+          prev
+            ? { ...prev, miJugador: { ...prev.miJugador, numeroCartas: miJugadorFromHook.numeroCartas ?? prev.miJugador.numeroCartas } }
+            : prev
+        );
       }
-    } catch (e) {
+    } catch {
       // ignore
     }
-    // only run when miJugadorFromHook.numeroCartas changes
-  }, [miJugadorFromHook?.numeroCartas]);
+    // only run when miJugadorFromHook.numeroCartas changes — include detalle and miJugadorFromHook to satisfy lint (effect is guarded)
+    }, [miJugadorFromHook?.numeroCartas, detalle, miJugadorFromHook]);
 
   useEffect(() => {
     // Intentar recuperar jugadorId de localStorage o reconectar antes de solicitar detalle privado
@@ -113,7 +153,7 @@ export default function JuegoPage() {
             if (recon && recon.jugadorId) {
               localId = recon.jugadorId;
               setJugadorId(localId);
-              try { persistJugadorId(codigo, localId); } catch (e) {}
+              try { persistJugadorId(codigo, localId); } catch { }
             }
           } catch (reErr) {
             // ignore
@@ -130,14 +170,18 @@ export default function JuegoPage() {
         }
         if (detalleResp && detalleResp.jugadorId && (!jugadorId || jugadorId !== detalleResp.jugadorId)) {
           setJugadorId(detalleResp.jugadorId);
-          try { persistJugadorId(codigo, detalleResp.jugadorId); } catch (e) {}
+          try { persistJugadorId(codigo, detalleResp.jugadorId); } catch { }
         }
 
   const cartas = await fetch('/api/cartas');
-  const cartasJson = cartas.ok ? await cartas.json() : [];
-  const db = cartasJson.reduce((acc: any, c: any) => { acc[c.codigo] = c; return acc; }, {});
+  const cartasJsonRaw: unknown = cartas.ok ? await cartas.json() : [];
+  let db: Record<string, Carta> = {};
+  if (Array.isArray(cartasJsonRaw)) {
+    const cartasJson = cartasJsonRaw as Carta[];
+    db = cartasJson.reduce((acc: Record<string, Carta>, c) => { acc[c.codigo] = c; return acc; }, {});
+  }
   // merge with globalCartasDB provided by useGameData (if any)
-  const merged = { ...db, ...(globalCartasDB || {}) };
+  const merged = { ...db, ...(globalCartasDB || {}) } as Record<string, Carta>;
   setCartasDB(merged);
 
         // Si las cartas en mano existen y no tienen atributos en el DB general, traer detalles por código
@@ -154,30 +198,35 @@ export default function JuegoPage() {
             );
 
             const results = await Promise.allSettled(promises);
-            results.forEach((r: any) => {
+            results.forEach((r) => {
               if (r.status === 'fulfilled') {
-                const payload = r.value;
+                const payload = (r as PromiseFulfilledResult<{ code: string; full?: Carta; err?: unknown }>).value;
                 if (payload && payload.full) {
                   const code = payload.code;
-                  const full = payload.full;
+                  const full = payload.full as Carta;
                   setCartasDB((prev) => ({ ...prev, [code]: full }));
                 }
               } else {
                 // fulfilled rejected promise wrapper (shouldn't happen often)
                 try {
-                  const payload = r.reason;
-                  if (payload && payload.code && payload.err) {
-                    console.warn('[JuegoPage] no se pudo traer detalle carta', payload.code, payload.err);
+                  const payload = (r as PromiseRejectedResult).reason as unknown;
+                  if (payload && typeof payload === 'object') {
+                    const obj = payload as Record<string, unknown>;
+                    const code = typeof obj.code === 'string' ? obj.code : undefined;
+                    const err = obj.err;
+                    if (code) {
+                      console.warn('[JuegoPage] no se pudo traer detalle carta', code, err);
+                    }
                   }
-                } catch (e) {
-                  console.warn('[JuegoPage] detalle carta fetch fallo', e);
+                } catch {
+                  console.warn('[JuegoPage] detalle carta fetch fallo');
                 }
               }
             });
           }
         }
-      } catch (e) {
-        console.warn('[JuegoPage] error cargando detalle/cartas', e);
+      } catch (err) {
+        console.warn('[JuegoPage] error cargando detalle/cartas', err);
       }
     };
 
@@ -203,7 +252,7 @@ export default function JuegoPage() {
 
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mt-6">
             <aside className="lg:col-span-1">
-              <PlayersList jugadores={jugadoresLobby as any} partidaTurno={detalle.turnoActual} />
+              <PlayersList jugadores={jugadoresLobby as unknown as JugadorPublic[]} partidaTurno={detalle.turnoActual} />
             </aside>
 
             <main className="lg:col-span-3 space-y-6">
@@ -213,46 +262,53 @@ export default function JuegoPage() {
                 onDragStart={(event) => {
                   setActiveId(event.active.id as string);
                   // record pointer start if available and save the dragged element rect
-                  try {
-                    const act: any = (event as any).activatorEvent;
+                    try {
+                    const act = (event as unknown as { activatorEvent?: unknown }).activatorEvent as unknown;
                     // activatorEvent might be a TouchEvent with touches[0]
-                    let clientX = act?.clientX ?? (act?.nativeEvent ? act.nativeEvent.clientX : undefined);
-                    let clientY = act?.clientY ?? (act?.nativeEvent ? act.nativeEvent.clientY : undefined);
-                    if (!clientX && act?.touches && act.touches[0]) {
-                      clientX = act.touches[0].clientX;
-                      clientY = act.touches[0].clientY;
+                    const anyAct = act as Record<string, unknown>;
+                    let clientX = (anyAct.clientX as number | undefined) ?? (anyAct.nativeEvent ? ((anyAct.nativeEvent as unknown) as { clientX?: number }).clientX : undefined);
+                    let clientY = (anyAct.clientY as number | undefined) ?? (anyAct.nativeEvent ? ((anyAct.nativeEvent as unknown) as { clientY?: number }).clientY : undefined);
+                    if ((clientX === undefined || clientY === undefined) && anyAct.touches) {
+                      const first = getFirstTouch(anyAct.touches as unknown);
+                      if (first) {
+                        clientX = first.clientX as number | undefined;
+                        clientY = first.clientY as number | undefined;
+                      }
                     }
                     if (typeof clientX === 'number' && typeof clientY === 'number') {
                       dragStartPointer.current = { x: clientX, y: clientY };
-                      try {
-                        const el = document.querySelector(`[data-draggable-id="${event.active.id}"]`) as HTMLElement | null;
-                        if (el) {
-                          const rect = el.getBoundingClientRect();
-                          (dragStartPointer as any).rect = rect;
-                          const offsetX = clientX - rect.left;
-                          const offsetY = clientY - rect.top;
-                          (dragStartPointer as any).currentOffset = { x: offsetX, y: offsetY };
+                        try {
+                          const el = document.querySelector(`[data-draggable-id="${event.active.id}"]`) as HTMLElement | null;
+                          if (el && dragStartPointer.current) {
+                            const rect = el.getBoundingClientRect();
+                            dragStartPointer.current.rect = rect;
+                            const offsetX = clientX - rect.left;
+                            const offsetY = clientY - rect.top;
+                            dragStartPointer.current.currentOffset = { x: offsetX, y: offsetY };
                           // compute overlay position in viewport coordinates (fixed overlay)
                           const x = clientX - offsetX;
                           const y = clientY - offsetY;
-                          console.log('[DnD] dragStart', { clientX, clientY, rect, offsetX, offsetY, x, y, dpr: window.devicePixelRatio });
+                          // debug log removed in production
                           setOverlayPos({ x, y });
                           // attach pointer tracker to follow finger/mouse for more reliable moves on touch devices
                           // define handler once and keep it in ref so we can remove it later
                           if (!pointerTrackerRef.current.handler) {
-                            const handler = (ev: any) => {
+                            const handler = (ev: PointerEvent | TouchEvent | MouseEvent) => {
                               // throttle with RAF
                               if (pointerTrackerRef.current.raf != null) return;
                               pointerTrackerRef.current.raf = window.requestAnimationFrame(() => {
                                 try {
-                                  let px = ev.clientX;
-                                  let py = ev.clientY;
-                                  if ((!px || !py) && ev.touches && ev.touches[0]) {
-                                    px = ev.touches[0].clientX;
-                                    py = ev.touches[0].clientY;
+                                  let px: number | undefined = undefined;
+                                  let py: number | undefined = undefined;
+                                  if ('clientX' in ev && typeof (ev as PointerEvent).clientX === 'number') {
+                                    px = (ev as PointerEvent).clientX;
+                                    py = (ev as PointerEvent).clientY;
+                                  } else if ('touches' in ev && (ev as TouchEvent).touches && (ev as TouchEvent).touches[0]) {
+                                    px = (ev as TouchEvent).touches[0].clientX;
+                                    py = (ev as TouchEvent).touches[0].clientY;
                                   }
                                   if (typeof px === 'number' && typeof py === 'number') {
-                                    const offset = (dragStartPointer as any).currentOffset;
+                                    const offset = dragStartPointer.current?.currentOffset;
                                     if (offset) {
                                       const nx = px - offset.x;
                                       const ny = py - offset.y;
@@ -261,7 +317,7 @@ export default function JuegoPage() {
                                       setOverlayPos({ x: px, y: py });
                                     }
                                   }
-                                } catch (e) {
+                                } catch {
                                   // ignore
                                 } finally {
                                   pointerTrackerRef.current.raf = null;
@@ -275,87 +331,194 @@ export default function JuegoPage() {
                             window.addEventListener('mousemove', handler, { passive: true });
                           }
                         } else {
-                          console.debug('[DnD] dragStart no element rect', { clientX, clientY });
                           setOverlayPos({ x: clientX, y: clientY });
                         }
-                      } catch (e) {
-                        console.debug('[DnD] dragStart failed computing rect', e);
-                        setOverlayPos({ x: clientX, y: clientY });
-                      }
+                      } catch {
+                          setOverlayPos({ x: clientX, y: clientY });
+                        }
                     }
-                  } catch (e) {
+                    } catch {
                     dragStartPointer.current = null;
                     setOverlayPos(null);
                   }
                 }}
                 onDragMove={(event) => {
-                  try {
-                    const delta: any = (event as any).delta;
-                    const act: any = (event as any).activatorEvent;
+                    try {
+                    const delta = (event as DragMoveEvent).delta as { x?: number; y?: number } | undefined;
+                    const act = (event as unknown as { activatorEvent?: unknown }).activatorEvent as unknown;
                     // prefer delta if available (more stable), otherwise use activatorEvent coords
                     if (dragStartPointer.current && delta) {
                       // base client coords are start + delta
                       const baseX = dragStartPointer.current.x + (delta.x ?? 0);
                       const baseY = dragStartPointer.current.y + (delta.y ?? 0);
-                      const offset = (dragStartPointer as any).currentOffset;
+                      const offset = dragStartPointer.current?.currentOffset;
                       if (offset) {
                         const x = baseX - offset.x;
                         const y = baseY - offset.y;
                         // if pointer tracker is active, skip DnD-kit onDragMove updates to avoid conflicts
                         if (pointerTrackerRef.current.handler) return;
-                        console.log('[DnD] dragMove delta', { baseX, baseY, offset, x, y });
                         setOverlayPos({ x, y });
                       } else {
-                        console.debug('[DnD] dragMove delta no offset', { baseX, baseY });
                         setOverlayPos({ x: baseX, y: baseY });
                       }
                     } else if (act) {
-                      let clientX = act?.clientX ?? (act?.nativeEvent ? act.nativeEvent.clientX : undefined);
-                      let clientY = act?.clientY ?? (act?.nativeEvent ? act.nativeEvent.clientY : undefined);
-                      if (!clientX && act?.touches && act.touches[0]) {
-                        clientX = act.touches[0].clientX;
-                        clientY = act.touches[0].clientY;
-                      }
+                      // safe extraction of client coordinates from an unknown activator event
+                      const getClientCoords = (ev: unknown): { clientX?: number; clientY?: number } => {
+                        try {
+                          if (!ev || typeof ev !== 'object') return {};
+                          const obj = ev as Record<string, unknown>;
+                          // Direct properties
+                          if (typeof obj.clientX === 'number' && typeof obj.clientY === 'number') {
+                            return { clientX: obj.clientX as number, clientY: obj.clientY as number };
+                          }
+                          // nativeEvent wrapper
+                          if (obj.nativeEvent && typeof obj.nativeEvent === 'object') {
+                            const ne = obj.nativeEvent as Record<string, unknown>;
+                            if (typeof ne.clientX === 'number' && typeof ne.clientY === 'number') {
+                              return { clientX: ne.clientX as number, clientY: ne.clientY as number };
+                            }
+                          }
+                          // touches (TouchEvent-like)
+                          if (Array.isArray(obj.touches) && obj.touches.length > 0) {
+                            const t0 = obj.touches[0] as Record<string, unknown> | undefined;
+                            if (t0 && typeof t0.clientX === 'number' && typeof t0.clientY === 'number') {
+                              return { clientX: t0.clientX as number, clientY: t0.clientY as number };
+                            }
+                          }
+                          // fallback for TouchList-like (object with item(0))
+                          if (obj.touches && typeof obj.touches === 'object') {
+                            const first = getFirstTouch(obj.touches as unknown);
+                            if (first && typeof first.clientX === 'number' && typeof first.clientY === 'number') {
+                              return { clientX: first.clientX as number, clientY: first.clientY as number };
+                            }
+                          }
+                        } catch {
+                          // intentionally ignore extraction errors
+                        }
+                        return {};
+                      };
+
+                      const { clientX, clientY } = getClientCoords(act);
                       if (typeof clientX === 'number' && typeof clientY === 'number') {
-                        const offset = (dragStartPointer as any).currentOffset;
+                        const offset = dragStartPointer.current?.currentOffset;
                         if (offset) {
                           const x = clientX - offset.x;
                           const y = clientY - offset.y;
                           if (pointerTrackerRef.current.handler) return;
-                          console.log('[DnD] dragMove activator', { clientX, clientY, offset, x, y });
                           setOverlayPos({ x, y });
                         } else {
                           if (pointerTrackerRef.current.handler) return;
-                          console.log('[DnD] dragMove activator no offset', { clientX, clientY });
                           setOverlayPos({ x: clientX, y: clientY });
                         }
                       }
                     }
-                  } catch (e) {
+                  } catch {
                     // ignore
                   }
                 }}
                 onDragEnd={async (event) => {
                   const { active, over } = event;
-                  setActiveId(null);
-                  setOverlayPos(null);
-                  // cleanup pointer tracker listeners
-                  try {
-                    const handler = pointerTrackerRef.current.handler;
-                    if (handler) {
-                      window.removeEventListener('pointermove', handler);
-                      window.removeEventListener('touchmove', handler);
-                      window.removeEventListener('mousemove', handler);
-                      pointerTrackerRef.current.handler = undefined;
+                  // helper: wait for the element with data-draggable-id to appear/move from startRect
+                  // Uses a MutationObserver on the document to detect DOM changes and compares bounding rects.
+                  const waitForElementRectChange = (id: string, startRect: DOMRect | undefined, timeout = 300) => {
+                    return new Promise<void>((resolve) => {
+                      if (!id) return resolve();
+                      let finished = false;
+                      const resolveNow = () => {
+                        if (finished) return;
+                        finished = true;
+                        try { obs.disconnect(); } catch {}
+                        try { clearTimeout(timer); } catch {}
+                        resolve();
+                      };
+
+                      const checkOnce = () => {
+                        try {
+                          const el = document.querySelector(`[data-draggable-id="${id}"]`) as HTMLElement | null;
+                          if (!el) {
+                            // If element not present, consider it acceptable (it may have been removed when played)
+                            return resolveNow();
+                          }
+                          const rect = el.getBoundingClientRect();
+                          if (!startRect) return resolveNow();
+                          const different = Math.abs(rect.left - startRect.left) > 1 || Math.abs(rect.top - startRect.top) > 1 || Math.abs(rect.width - startRect.width) > 1 || Math.abs(rect.height - startRect.height) > 1;
+                          if (different) return resolveNow();
+                        } catch {
+                          return resolveNow();
+                        }
+                        return false;
+                      };
+
+                      // immediate check
+                      try {
+                        if (checkOnce()) return resolveNow();
+                      } catch {
+                        return resolveNow();
+                      }
+
+                      // Observe DOM mutations globally; when a change happens, re-check.
+                      const obs = new MutationObserver(() => {
+                        try {
+                          if (checkOnce()) resolveNow();
+                        } catch {
+                          resolveNow();
+                        }
+                      });
+
+                      try {
+                        obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+                      } catch {
+                        // If observation fails for any reason, fallback to resolving after timeout
+                      }
+
+                      // Safety timeout
+                      const timer = setTimeout(() => {
+                        resolveNow();
+                      }, timeout);
+                    });
+                  };
+
+                  // helper to cleanup pointer tracker and then hide overlay after a short delay
+                  const clearPointerTrackerAndOverlay = async (delay = 30, waitForId?: string, startRect?: DOMRect | undefined) => {
+                    try {
+                      const handler = pointerTrackerRef.current.handler;
+                      if (handler) {
+                        window.removeEventListener('pointermove', handler);
+                        window.removeEventListener('touchmove', handler);
+                        window.removeEventListener('mousemove', handler);
+                        pointerTrackerRef.current.handler = undefined;
+                      }
+                      if (pointerTrackerRef.current.raf) {
+                        window.cancelAnimationFrame(pointerTrackerRef.current.raf as number);
+                        pointerTrackerRef.current.raf = null;
+                      }
+                    } catch {
+                      // ignore
                     }
-                    if (pointerTrackerRef.current.raf) {
-                      window.cancelAnimationFrame(pointerTrackerRef.current.raf as number);
-                      pointerTrackerRef.current.raf = null;
+
+                    // if caller provided an id to wait for (reorder), poll until its rect changes or timeout
+                    if (waitForId) {
+                      try {
+                        await waitForElementRectChange(waitForId, startRect, 300);
+                      } catch {
+                        // ignore
+                      }
                     }
-                  } catch (e) {
-                    // ignore
+
+                    // wait a frame (and a small delay) so the reorder can paint and avoid flicker
+                    window.requestAnimationFrame(() => {
+                      setTimeout(() => {
+                        setActiveId(null);
+                        setOverlayPos(null);
+                      }, delay);
+                    });
+                  };
+
+                  // If drag was cancelled (no drop target), clear overlay immediately
+                  if (!over) {
+                    clearPointerTrackerAndOverlay(0);
+                    return;
                   }
-                  if (!over) return;
 
                   // si se soltó sobre otra carta, reordenar
                   if (over.id && active.id && over.id !== 'mesa' && over.id !== active.id) {
@@ -366,6 +529,10 @@ export default function JuegoPage() {
                       setManoOrder(next);
                       // también notificar al backend si se desea persistir la orden
                     }
+                    // allow a short moment for the DOM reorder to paint, then clear overlay to avoid flicker
+                    // pass the id we waited for and the original rect so the helper can detect when it moved
+                    const startRect = dragStartPointer.current?.rect as DOMRect | undefined;
+                    clearPointerTrackerAndOverlay(50, over.id as string, startRect);
                     return;
                   }
 
@@ -388,14 +555,18 @@ export default function JuegoPage() {
                       if (nuevoDetalle && nuevoDetalle.miJugador && Array.isArray(nuevoDetalle.miJugador.cartasEnMano)) {
                         setManoOrder(nuevoDetalle.miJugador.cartasEnMano);
                       }
-                    } catch (e: any) {
-                      console.error('[JuegoPage] jugarCarta error', e);
-                      setToastMessage(e?.message || 'Error al jugar la carta');
+                    } catch (err: unknown) {
+                      console.error('[JuegoPage] jugarCarta error', err);
+                      setToastMessage(getErrorMessage(err, 'Error al jugar la carta'));
                       // revertir si falla
                       setManoOrder(previousOrder);
                     } finally {
                       // limpiar guardado después de un tiempo corto para permitir nuevas jugadas
                       setTimeout(() => { if (lastPlayedRef.current === playingId) lastPlayedRef.current = null; }, 2000);
+                      // clear overlay after the play flow settles to avoid flicker when the card is removed
+                      // If the card was removed from DOM (played), wait for the new mano layout to reflect
+                      const startRect = dragStartPointer.current?.rect as DOMRect | undefined;
+                      clearPointerTrackerAndOverlay(50, playingId, startRect);
                     }
                   }
                 }}
@@ -422,7 +593,7 @@ export default function JuegoPage() {
                 createPortal(
                   (() => {
                     const carta = cartasDB[activeId];
-                    const fallback = { codigo: activeId, nombre: activeId, atributos: {} } as any;
+                    const fallback: Carta = { codigo: activeId, nombre: String(activeId), atributos: {} } as Carta;
                     // use saved bounding rect if available so overlay size matches the original
                     const rect = dragStartPointer.current?.rect as DOMRect | undefined;
                     const width = rect?.width ?? 160;
@@ -438,6 +609,7 @@ export default function JuegoPage() {
                   document.body
                 )
               ) : null}
+              <Toast message={toastMessage} open={Boolean(toastMessage)} onClose={() => setToastMessage('')} />
             </DndContext>
             </main>
           </div>
