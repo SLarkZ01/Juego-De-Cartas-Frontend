@@ -16,61 +16,85 @@ export default function CartaComponent({
   atributoSeleccionado,
   className = '' 
 }: CartaComponentProps) {
+  // Posiciones aproximadas para los 4 atributos en la plantilla `public/CartaNormal.webp`.
+  // Se usan clases absolute con porcentajes para facilitar ajustes responsivos.
+  // ROJO: fuerza, AZUL: defensa, VERDE: ki, AMARILLO: velocidad
+
+  // Backend uses Spanish keys: poder, defensa, ki, velocidad, transformaciones
+  // We support fallbacks from possible other keys used previously (fuerza/strength, defense, energy, speed)
+  const fuerza = carta.atributos?.poder ?? carta.atributos?.fuerza ?? carta.atributos?.strength ?? 0;
+  const defensa = carta.atributos?.defensa ?? carta.atributos?.defense ?? 0;
+  const ki = carta.atributos?.ki ?? carta.atributos?.energy ?? 0;
+  const velocidad = carta.atributos?.velocidad ?? carta.atributos?.speed ?? 0;
+  // transformaciones puede venir como número dentro de atributos o como un array en carta.transformaciones
+  const transformacionesCount = carta.atributos?.transformaciones ?? (Array.isArray(carta.transformaciones) ? carta.transformaciones.length : 0);
+
   return (
-    <div className={`relative bg-gradient-to-br from-gray-900 to-black rounded-lg border-2 border-orange-500/30 overflow-hidden shadow-xl hover:shadow-2xl transition-all ${className}`}>
-      {/* Imagen de la carta */}
-      <div className="relative aspect-[2/3] w-full">
-        {carta.imagenUrl ? (
-          <Image
-            src={carta.imagenUrl}
-            alt={carta.nombre}
-            fill
-            className="object-cover"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-800 to-gray-900">
-            <span className="text-6xl">❓</span>
+    <div className={`relative w-full max-w-[220px] ${className}`}>
+      {/* Contenedor con aspecto de carta 2:3 */}
+      <div className="relative aspect-[2/3] w-full rounded-lg overflow-hidden drop-shadow-lg">
+        {/* Plantilla de carta (fondo con casillas de atributos) */}
+        <Image
+          src="/CartaNormal.webp"
+          alt="Plantilla carta"
+          fill
+          className="object-cover"
+          priority={false}
+        />
+
+        {/* Badge pequeño arriba-izquierda con el código/numero de carta (no tapa el diseño) */}
+        {carta.codigo && (
+          <div className="absolute top-2 left-2 z-20 pointer-events-none">
+            <div className="bg-black/60 text-white text-xs font-bold px-2 py-1 rounded-md backdrop-blur-sm">{carta.codigo}</div>
           </div>
         )}
-        
-        {/* Overlay con el nombre */}
-        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-4">
-          <h3 className="text-white font-bold text-lg truncate">{carta.nombre}</h3>
-          {carta.raza && (
-            <p className="text-orange-400 text-sm">{carta.raza}</p>
+
+        {/* Imagen del artwork de la carta (centrado dentro del círculo de la plantilla) */}
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          {carta.imagenUrl ? (
+            <Image
+              src={carta.imagenUrl}
+              alt={carta.nombre}
+              width={140}
+              height={140}
+              className="object-contain rounded-full"
+            />
+          ) : (
+            <div className="w-32 h-32 rounded-full bg-gray-800 flex items-center justify-center text-3xl text-white">?</div>
           )}
         </div>
-      </div>
 
-      {/* Atributos */}
-      {mostrarAtributos && carta.atributos && (
-        <div className="p-3 bg-black/50 space-y-1">
-          {Object.entries(carta.atributos).map(([key, value]) => (
-            <div 
-              key={key}
-              className={`flex justify-between items-center px-2 py-1 rounded ${
-                atributoSeleccionado === key 
-                  ? 'bg-orange-600/30 border border-orange-500' 
-                  : 'bg-gray-800/50'
-              }`}
-            >
-              <span className="text-gray-300 text-sm capitalize">{key}</span>
-              <span className={`font-bold ${
-                atributoSeleccionado === key ? 'text-orange-400' : 'text-white'
-              }`}>
-                {value}
-              </span>
+        {/* Nombre y subtítulo abajo */}
+        <div className="absolute left-4 right-4 bottom-20 text-center pointer-events-none">
+          <h3 className="text-white font-bold text-sm truncate">{carta.nombre}</h3>
+          {carta.raza && <p className="text-yellow-200 text-xs">{carta.raza}</p>}
+        </div>
+
+        {/* Atributos posicionados: ajusta porcentajes según la plantilla */}
+        {mostrarAtributos && (
+          <div className="absolute left-4 right-4 bottom-4 pointer-events-none">
+            {/* usar el nuevo componente de detalle para renderizar atributos y aplicar multiplicador si se extiende */}
+            {/* Por ahora no pasamos multiplicador (1) desde este componente; se puede ampliar más adelante. */}
+            {/* Import dinámico para evitar duplicar bundles? Mantengo import estático por simplicidad y claridad. */}
+            <div className="mx-auto max-w-[160px]">
+              {/* Render simple de valores: reutilizamos el layout pequeño para mostrar los atributos */}
+              <div className="grid grid-cols-4 gap-2">
+                <div className="bg-red-600/90 text-white rounded text-xs font-bold text-center py-1">{fuerza}</div>
+                <div className="bg-blue-600/90 text-white rounded text-xs font-bold text-center py-1">{defensa}</div>
+                <div className="bg-emerald-600/90 text-white rounded text-xs font-bold text-center py-1">{ki}</div>
+                <div className="bg-yellow-400/95 text-black rounded text-xs font-bold text-center py-1">{velocidad}</div>
+              </div>
             </div>
-          ))}
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* Transformaciones disponibles */}
-      {carta.transformaciones && carta.transformaciones.length > 0 && (
-        <div className="absolute top-2 right-2 bg-yellow-500/90 text-black px-2 py-1 rounded-full text-xs font-bold">
-          ⚡ {carta.transformaciones.length}
-        </div>
-      )}
+        {/* Indicador de transformaciones (usa atributos.transformaciones si está presente) */}
+        {transformacionesCount > 0 && (
+          <div className="absolute top-3 right-3 bg-yellow-300/95 text-black px-2 py-0.5 rounded-full text-xs font-bold">
+            ⚡ {transformacionesCount}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

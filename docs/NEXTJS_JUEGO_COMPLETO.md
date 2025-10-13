@@ -536,6 +536,53 @@ export function ManoJugador({
 }
 ```
 
+#### 5.1.1 Implementación recomendada: `components/game/ManoJugador.tsx`
+
+He incluido un componente listo para usar `components/game/ManoJugador.tsx` en el repositorio. Resumen de la implementación:
+
+- Recibe `cartasCodigos: string[]` (la lista ordenada de códigos del jugador) y `cartasDB: Record<string, Carta>` con los datos de cada carta.
+- Renderiza una fila horizontal con `overflow-x` para soportar cualquier número de cartas.
+- Cada carta es renderizada usando `CartaComponent` (la plantilla `CartaNormal.webp`), y tiene `onClick` para jugarla si se requiere.
+- Usa `flex-shrink-0` para evitar que las cartas se reduzcan y permite scroll; `mostrarMini` cambia el ancho para vistas compactas.
+
+Código de ejemplo de uso:
+
+```tsx
+import ManoJugador from '@/components/game/ManoJugador';
+
+function MiZona({ gameState, jugadorId, enviarJugada }) {
+  const mi = gameState.miJugador;
+
+  return (
+    <div>
+      <ManoJugador
+        cartasCodigos={mi.cartasEnMano}
+        cartasDB={gameState.cartasDB}
+        onJugarCarta={(codigo) => enviarJugada({ accion: 'JUGAR_CARTA', jugadorId, codigo })}
+        mostrarMini={false}
+      />
+    </div>
+  );
+}
+```
+
+Recomendaciones para el layout:
+
+- Mantener un `max-width` por carta (ej. `w-40`) y usar `overflow-x-auto` para la fila; así la UI es predecible con 2, 8 o 16 cartas.
+- Ofrecer una vista compacta (`mostrarMini`) en móviles o cuando la mano exceda un umbral (p. ej. > 10 cartas) para mejorar la navegación.
+- Para accesibilidad y teclado, cada carta debe tener `role="button"` y `tabIndex` cuando sea clicable.
+
+Sincronización con backend / DB:
+
+- Como muestra la captura de la base de datos, cuando hay 2 jugadores las 32 cartas se reparten en 16/16. Frontend debe recibir `miJugador.cartasEnMano` desde `GET /api/partidas/{codigo}/detalle?jugadorId={miId}`.
+- Cada carta se identifica por su `codigo` único (ej. `2H`, `3A`), usa esto como `key` y para pedir los detalles en `cartasDB`.
+
+Escalado y variantes:
+
+- Grid en lugar de fila: para pantallas de mesa (tablet/desktop) puede ser útil convertir la tira en varias filas (grid) si prefieres mostrar más cartas sin scroll.
+- Agrupación visual: cuando haya muchas cartas, puedes agrupar por paquete/país/raridad y mostrar un contador en cada grupo.
+
+
 ### 5.2 Componente: `Mesa`
 
 Muestra las cartas jugadas en la ronda actual.

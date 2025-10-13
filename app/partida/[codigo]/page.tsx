@@ -39,34 +39,18 @@ export default function PartidaPage() {
   };
 
   // Al recibir mensajes del topic principal, buscamos PARTIDA_INICIADA para cargar detalle privado
+
   const handlePartidaMessage = useCallback(async (payload: any) => {
     try {
       // Detectar evento de inicio
       const tipo = payload?.event || payload?.tipo || payload?.eventType || (payload?.datos && payload.datos.event);
       if (tipo === 'PARTIDA_INICIADA' || (payload && payload.turnoActual)) {
-        // pedir detalle privado
+        // Redirigir a la ruta del juego cuando la partida comience
+        setToastMessage('Partida iniciada — redirigiendo al juego...');
         try {
-          const detalle = await fetch(`/api/partidas/${codigo}/detalle?jugadorId=${encodeURIComponent(jugadorId || '')}`, { credentials: 'include' });
-          if (detalle.ok) {
-            const data = await detalle.json();
-            // Si obtuvimos la mano privada, navegar a la UI de partida (o mostrar toast)
-            // Aquí asumimos que la ruta /partida/{codigo} ya corresponde al lobby y la UI de juego
-            // se montará cuando el estado de la aplicación lo requiera.
-            setToastMessage('Partida iniciada — cargando mano privada...');
-            // opcional: redirigir a la misma página para forzar recarga de componentes del juego
-            // router.push(`/partida/${codigo}`);
-          } else {
-            console.warn('[handlePartidaMessage] GET detalle devolvió error, código', detalle.status);
-            // reintentar breve
-            setTimeout(async () => {
-              try {
-                const r2 = await fetch(`/api/partidas/${codigo}/detalle?jugadorId=${encodeURIComponent(jugadorId || '')}`, { credentials: 'include' });
-                if (r2.ok) setToastMessage('Mano cargada');
-              } catch (e) {}
-            }, 300);
-          }
+          router.push(`/partida/${codigo}/juego`);
         } catch (e) {
-          console.warn('[handlePartidaMessage] error pidiendo detalle tras PARTIDA_INICIADA', e);
+          console.warn('[handlePartidaMessage] error redirigiendo al juego', e);
         }
       }
     } catch (e) {
@@ -97,6 +81,7 @@ export default function PartidaPage() {
   const [showCancelledModal, setShowCancelledModal] = useState(false);
   const [toastMessage, setToastMessage] = useState<string>('');
   const [starting, setStarting] = useState(false);
+  // No guardamos la vista de partida en el lobby: se redirige a /partida/{codigo}/juego
 
   useEffect(() => {
     // esperar a que el contexto de auth haya cargado antes de redirigir
@@ -192,8 +177,9 @@ export default function PartidaPage() {
 
       // Llamar al endpoint que inicia la partida
       await partidaService.iniciarPartida(codigo);
-      // Si el POST es exitoso, esperamos el evento PARTIDA_INICIADA vía WS (handlePartidaMessage)
-      setToastMessage('Solicitud de inicio enviada, esperando confirmación...');
+  // Si el POST es exitoso, redirigir inmediatamente al juego (el backend publicará el evento también)
+  setToastMessage('Solicitud de inicio enviada — yendo al juego...');
+  try { router.push(`/partida/${codigo}/juego`); } catch(e) { /* ignore */ }
     } catch (err: any) {
       console.error('Error iniciando partida:', err);
       setToastMessage(err?.message || 'Error al iniciar partida');
