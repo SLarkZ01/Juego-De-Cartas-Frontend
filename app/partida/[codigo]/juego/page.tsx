@@ -10,6 +10,7 @@ import Mesa from '@/components/game/Mesa';
 import { partidaService, cartaService } from '@/services/partida.service';
 import { gameplayService } from '@/services/partida.service';
 import { useLobbyRealTime } from '@/hooks/useLobbyRealTime';
+import { useGameData } from '@/hooks/useGameData';
 import { readJugadorId, persistJugadorId } from '@/lib/partidaUtils';
 import { DndContext, DragOverlay, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { restrictToWindowEdges } from '@dnd-kit/modifiers';
@@ -40,11 +41,11 @@ export default function JuegoPage() {
   const sensors = useSensors(pointerSensor, touchSensor);
 
   // Hook WS para lista de jugadores (reutiliza lógica existente)
-  const { jugadores: jugadoresLobby, connected, registerSession } = useLobbyRealTime(codigo, jugadorId);
+  const { cartasDB: globalCartasDB, miJugador: miJugadorFromHook, handlers } = useGameData();
+  const { jugadores: jugadoresLobby, connected, registerSession } = useLobbyRealTime(codigo, jugadorId, undefined, handlers.onPartidaIniciada, handlers.onCountsMessage);
 
   // Evitar re-registrar la sesión varias veces
   const registeredRef = useRef(false);
-
   // Cuando tengamos jugadorId y estemos conectados al WS, registrar la sesión para que el backend marque conectado=true
   useEffect(() => {
     if (connected && jugadorId && !registeredRef.current) {
@@ -57,6 +58,18 @@ export default function JuegoPage() {
       }
     }
   }, [connected, jugadorId, registerSession]);
+
+  // Keep detalle.miJugador.numeroCartas in sync with miJugadorFromHook when counts arrive via WS
+  useEffect(() => {
+    try {
+      if (miJugadorFromHook && miJugadorFromHook.id && detalle && detalle.miJugador && detalle.miJugador.id === miJugadorFromHook.id) {
+        setDetalle((prev: any) => ({ ...prev, miJugador: { ...prev.miJugador, numeroCartas: miJugadorFromHook.numeroCartas ?? prev.miJugador.numeroCartas } }));
+      }
+    } catch (e) {
+      // ignore
+    }
+    // only run when miJugadorFromHook.numeroCartas changes
+  }, [miJugadorFromHook?.numeroCartas]);
 
   useEffect(() => {
     // Intentar recuperar jugadorId de localStorage o reconectar antes de solicitar detalle privado
@@ -96,10 +109,12 @@ export default function JuegoPage() {
           try { persistJugadorId(codigo, detalleResp.jugadorId); } catch (e) {}
         }
 
-        const cartas = await fetch('/api/cartas');
-        const cartasJson = cartas.ok ? await cartas.json() : [];
-        const db = cartasJson.reduce((acc: any, c: any) => { acc[c.codigo] = c; return acc; }, {});
-        setCartasDB(db);
+  const cartas = await fetch('/api/cartas');
+  const cartasJson = cartas.ok ? await cartas.json() : [];
+  const db = cartasJson.reduce((acc: any, c: any) => { acc[c.codigo] = c; return acc; }, {});
+  // merge with globalCartasDB provided by useGameData (if any)
+  const merged = { ...db, ...(globalCartasDB || {}) };
+  setCartasDB(merged);
 
         // Si las cartas en mano existen y no tienen atributos en el DB general, traer detalles por código
         if (detalleResp && detalleResp.miJugador && Array.isArray(detalleResp.miJugador.cartasEnMano)) {

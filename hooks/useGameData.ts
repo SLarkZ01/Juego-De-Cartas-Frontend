@@ -64,12 +64,43 @@ export function useGameData() {
     }
   }, [miJugador]);
 
+  // Handler for counts/topic messages that may include number of cards per jugador
+  const onCountsMessage = useCallback((payload: any) => {
+    try {
+      // payload might be { jugadores: [{ id, numeroCartas, ... }, ...] } or { counts: { jugadorId: count } }
+      if (!payload) return;
+
+      // Update jugadores counts when payload.jugadores is provided
+      if (Array.isArray(payload.jugadores)) {
+        const mapa: Record<string, number> = {};
+        payload.jugadores.forEach((j: any) => {
+          if (j && j.id && typeof j.numeroCartas === 'number') mapa[j.id] = j.numeroCartas;
+        });
+
+        // Update miJugador.numeroCartas if present
+        if (miJugador && miJugador.id && typeof mapa[miJugador.id] === 'number') {
+          setMiJugador((prev: any) => ({ ...prev, numeroCartas: mapa[miJugador.id] }));
+        }
+      }
+
+      // If payload.counts is provided as a map
+      if (payload.counts && typeof payload.counts === 'object') {
+        const counts = payload.counts as Record<string, number>;
+        if (miJugador && miJugador.id && typeof counts[miJugador.id] === 'number') {
+          setMiJugador((prev: any) => ({ ...prev, numeroCartas: counts[miJugador.id] }));
+        }
+      }
+    } catch (e) {
+      console.warn('[useGameData] onCountsMessage error', e);
+    }
+  }, [miJugador]);
+
   return {
     cartasDB,
     miJugador,
     cartasEnMesa,
     atributoSeleccionado,
-    handlers: { onPartidaIniciada, onAtributoSeleccionado, onCartaJugada, onTransformacion, onRondaResuelta },
+    handlers: { onPartidaIniciada, onAtributoSeleccionado, onCartaJugada, onTransformacion, onRondaResuelta, onCountsMessage },
     setMiJugador,
     setCartasDB,
   };
