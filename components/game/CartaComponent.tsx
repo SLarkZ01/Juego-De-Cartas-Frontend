@@ -73,16 +73,37 @@ export default function CartaComponent({
         {/* Atributos posicionados: ajusta porcentajes según la plantilla */}
         {mostrarAtributos && (
           <div className="absolute left-4 right-4 bottom-4 pointer-events-none">
-            {/* usar el nuevo componente de detalle para renderizar atributos y aplicar multiplicador si se extiende */}
-            {/* Por ahora no pasamos multiplicador (1) desde este componente; se puede ampliar más adelante. */}
-            {/* Import dinámico para evitar duplicar bundles? Mantengo import estático por simplicidad y claridad. */}
             <div className="mx-auto max-w-[160px]">
-              {/* Render simple de valores: reutilizamos el layout pequeño para mostrar los atributos */}
+              {/* Render simple de valores: si no hay atributos aún, mostramos skeletons */}
               <div className="grid grid-cols-4 gap-2">
-                <div className="bg-red-600/90 text-white rounded text-xs font-bold text-center py-1">{fuerza}</div>
-                <div className="bg-blue-600/90 text-white rounded text-xs font-bold text-center py-1">{defensa}</div>
-                <div className="bg-emerald-600/90 text-white rounded text-xs font-bold text-center py-1">{ki}</div>
-                <div className="bg-yellow-400/95 text-black rounded text-xs font-bold text-center py-1">{velocidad}</div>
+                <div className="bg-red-600/90 text-white rounded text-xs font-bold text-center py-1">
+                  {typeof carta.atributos === 'object' && carta.atributos && Object.keys(carta.atributos).length > 0 ? (
+                    fuerza
+                  ) : (
+                    <div className="h-4 w-full bg-red-700/60 rounded animate-pulse mx-auto" />
+                  )}
+                </div>
+                <div className="bg-blue-600/90 text-white rounded text-xs font-bold text-center py-1">
+                  {typeof carta.atributos === 'object' && carta.atributos && Object.keys(carta.atributos).length > 0 ? (
+                    defensa
+                  ) : (
+                    <div className="h-4 w-full bg-blue-700/60 rounded animate-pulse mx-auto" />
+                  )}
+                </div>
+                <div className="bg-emerald-600/90 text-white rounded text-xs font-bold text-center py-1">
+                  {typeof carta.atributos === 'object' && carta.atributos && Object.keys(carta.atributos).length > 0 ? (
+                    ki
+                  ) : (
+                    <div className="h-4 w-full bg-emerald-700/60 rounded animate-pulse mx-auto" />
+                  )}
+                </div>
+                <div className="bg-yellow-400/95 text-black rounded text-xs font-bold text-center py-1">
+                  {typeof carta.atributos === 'object' && carta.atributos && Object.keys(carta.atributos).length > 0 ? (
+                    velocidad
+                  ) : (
+                    <div className="h-4 w-full bg-yellow-300/60 rounded animate-pulse mx-auto" />
+                  )}
+                </div>
               </div>
             </div>
           </div>

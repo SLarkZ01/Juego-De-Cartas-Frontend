@@ -7,7 +7,7 @@ import LobbyHeader from '@/components/lobby/LobbyHeader';
 import PlayersList from '@/components/lobby/PlayersList';
 import ManoJugador from '@/components/game/ManoJugador';
 import Mesa from '@/components/game/Mesa';
-import { partidaService } from '@/services/partida.service';
+import { partidaService, cartaService } from '@/services/partida.service';
 import { gameplayService } from '@/services/partida.service';
 import { useLobbyRealTime } from '@/hooks/useLobbyRealTime';
 import { readJugadorId, persistJugadorId } from '@/lib/partidaUtils';
@@ -94,6 +94,43 @@ export default function JuegoPage() {
         const cartasJson = cartas.ok ? await cartas.json() : [];
         const db = cartasJson.reduce((acc: any, c: any) => { acc[c.codigo] = c; return acc; }, {});
         setCartasDB(db);
+
+        // Si las cartas en mano existen y no tienen atributos en el DB general, traer detalles por código
+        if (detalleResp && detalleResp.miJugador && Array.isArray(detalleResp.miJugador.cartasEnMano)) {
+          const missingCodes = detalleResp.miJugador.cartasEnMano.filter((code: string) => {
+            const entry = db[code];
+            return !entry || !entry.atributos || Object.keys(entry.atributos).length === 0;
+          });
+
+          if (missingCodes.length > 0) {
+            // Parallel fetch with Promise.allSettled to avoid failing the whole batch
+            const promises = missingCodes.map((code: string) =>
+              cartaService.obtenerCartaPorCodigo(code).then((full) => ({ code, full })).catch((err) => ({ code, err }))
+            );
+
+            const results = await Promise.allSettled(promises);
+            results.forEach((r: any) => {
+              if (r.status === 'fulfilled') {
+                const payload = r.value;
+                if (payload && payload.full) {
+                  const code = payload.code;
+                  const full = payload.full;
+                  setCartasDB((prev) => ({ ...prev, [code]: full }));
+                }
+              } else {
+                // fulfilled rejected promise wrapper (shouldn't happen often)
+                try {
+                  const payload = r.reason;
+                  if (payload && payload.code && payload.err) {
+                    console.warn('[JuegoPage] no se pudo traer detalle carta', payload.code, payload.err);
+                  }
+                } catch (e) {
+                  console.warn('[JuegoPage] detalle carta fetch fallo', e);
+                }
+              }
+            });
+          }
+        }
       } catch (e) {
         console.warn('[JuegoPage] error cargando detalle/cartas', e);
       }
