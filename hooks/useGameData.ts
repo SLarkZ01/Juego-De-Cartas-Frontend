@@ -19,17 +19,18 @@ export function useGameData() {
     }
   }, []);
 
+  // Load cartas DB once on mount. Previously this effect depended on `cartasDB` and
+  // retried when the fetch returned non-ok (leaving cartasDB empty), causing a loop.
   useEffect(() => {
-    if (Object.keys(cartasDB).length === 0) {
-      loadCartasDB();
-    }
-  }, [cartasDB, loadCartasDB]);
+    loadCartasDB();
+  }, [loadCartasDB]);
 
   const onPartidaIniciada = useCallback(async (event: any) => {
-    // reload cartas if empty
-    if (Object.keys(cartasDB).length === 0) await loadCartasDB();
+    // Ensure cartas DB is loaded when a partida is initiated. loadCartasDB is idempotent
+    // for our purposes in dev; if already loaded it will simply refetch.
+    await loadCartasDB();
     // if event contiene miJugadorId, podríamos pedir detalle privado fuera
-  }, [cartasDB, loadCartasDB]);
+  }, [loadCartasDB]);
 
   const onAtributoSeleccionado = useCallback((event: any) => {
     setAtributoSeleccionado(event.atributo);

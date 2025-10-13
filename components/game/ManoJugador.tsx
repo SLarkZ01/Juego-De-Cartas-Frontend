@@ -166,8 +166,12 @@ export default function ManoJugador({
 // Componente sortable que envuelve la carta
 function SortableCard({ id, children, mostrarMini, onClick }: any) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  // When dragging, avoid applying the sortable transform to the original node to prevent
+  // visual duplication/flicker with a separate portal overlay. Keep opacity:0 so the
+  // original element stays in layout for sizing, but don't move it via transform.
+  const appliedTransform = isDragging ? undefined : CSS.Transform.toString(transform);
   const style = {
-    transform: CSS.Transform.toString(transform),
+    transform: appliedTransform,
     transition,
   };
 
@@ -178,11 +182,15 @@ function SortableCard({ id, children, mostrarMini, onClick }: any) {
       {...attributes}
       {...listeners}
       className={`flex-shrink-0 ${mostrarMini ? 'w-24' : 'w-40'} ${isDragging ? 'scale-105 z-50' : ''}`}
-      // hide original while dragging so overlay is the only visible instance
-      aria-hidden={isDragging}
+      // use opacity instead of visibility to keep the element's bounding rect stable for overlay sizing
+  // avoid aria-hidden on focused elements (accessibility): use inert or opacity for visual hiding
+  aria-hidden={false}
       style={{
         ...style,
-        visibility: isDragging ? 'hidden' : undefined,
+        opacity: isDragging ? 0 : undefined,
+        pointerEvents: isDragging ? 'none' : undefined,
+        // ensure element keeps its width/height so getBoundingClientRect returns meaningful values
+        minWidth: mostrarMini ? 96 : 160,
       }}
       onClick={onClick}
       role={onClick ? 'button' : undefined}

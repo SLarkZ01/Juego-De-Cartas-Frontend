@@ -32,7 +32,10 @@ export default function JuegoPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const lastPlayedRef = React.useRef<string | null>(null);
   const [overlayPos, setOverlayPos] = useState<{ x: number; y: number } | null>(null);
-  const dragStartPointer = React.useRef<{ x: number; y: number } | null>(null);
+  // store pointer start, offset and element rect for precise overlay positioning on small screens
+  const dragStartPointer = React.useRef<any>(null);
+  // pointer tracker to follow actual pointer/touch coordinates during drag (RAF throttled)
+  const pointerTrackerRef = React.useRef<{ handler?: any; raf?: number | null }>({ handler: undefined, raf: null });
 
   // DnD sensors must be created at top-level so hook order doesn't change between renders
   // require a small movement before activating drag to avoid jumps on different screen scalings
@@ -58,6 +61,27 @@ export default function JuegoPage() {
       }
     }
   }, [connected, jugadorId, registerSession]);
+
+  // cleanup pointer tracker if component unmounts
+  useEffect(() => {
+    return () => {
+      try {
+        const handler = pointerTrackerRef.current.handler;
+        if (handler) {
+          window.removeEventListener('pointermove', handler);
+          window.removeEventListener('touchmove', handler);
+          window.removeEventListener('mousemove', handler);
+          pointerTrackerRef.current.handler = undefined;
+        }
+        if (pointerTrackerRef.current.raf) {
+          window.cancelAnimationFrame(pointerTrackerRef.current.raf as number);
+          pointerTrackerRef.current.raf = null;
+        }
+      } catch (e) {
+        // ignore
+      }
+    };
+  }, []);
 
   // Keep detalle.miJugador.numeroCartas in sync with miJugadorFromHook when counts arrive via WS
   useEffect(() => {
@@ -188,26 +212,74 @@ export default function JuegoPage() {
                 modifiers={[restrictToWindowEdges]}
                 onDragStart={(event) => {
                   setActiveId(event.active.id as string);
-                  // record pointer start if available
+                  // record pointer start if available and save the dragged element rect
                   try {
                     const act: any = (event as any).activatorEvent;
-                    const clientX = act?.clientX ?? (act?.nativeEvent ? act.nativeEvent.clientX : undefined);
-                    const clientY = act?.clientY ?? (act?.nativeEvent ? act.nativeEvent.clientY : undefined);
+                    // activatorEvent might be a TouchEvent with touches[0]
+                    let clientX = act?.clientX ?? (act?.nativeEvent ? act.nativeEvent.clientX : undefined);
+                    let clientY = act?.clientY ?? (act?.nativeEvent ? act.nativeEvent.clientY : undefined);
+                    if (!clientX && act?.touches && act.touches[0]) {
+                      clientX = act.touches[0].clientX;
+                      clientY = act.touches[0].clientY;
+                    }
                     if (typeof clientX === 'number' && typeof clientY === 'number') {
                       dragStartPointer.current = { x: clientX, y: clientY };
-                      // compute pointer offset relative to the dragged element's bounding rect
                       try {
                         const el = document.querySelector(`[data-draggable-id="${event.active.id}"]`) as HTMLElement | null;
                         if (el) {
                           const rect = el.getBoundingClientRect();
+                          (dragStartPointer as any).rect = rect;
                           const offsetX = clientX - rect.left;
                           const offsetY = clientY - rect.top;
                           (dragStartPointer as any).currentOffset = { x: offsetX, y: offsetY };
-                          setOverlayPos({ x: clientX - offsetX, y: clientY - offsetY });
+                          // compute overlay position in viewport coordinates (fixed overlay)
+                          const x = clientX - offsetX;
+                          const y = clientY - offsetY;
+                          console.log('[DnD] dragStart', { clientX, clientY, rect, offsetX, offsetY, x, y, dpr: window.devicePixelRatio });
+                          setOverlayPos({ x, y });
+                          // attach pointer tracker to follow finger/mouse for more reliable moves on touch devices
+                          // define handler once and keep it in ref so we can remove it later
+                          if (!pointerTrackerRef.current.handler) {
+                            const handler = (ev: any) => {
+                              // throttle with RAF
+                              if (pointerTrackerRef.current.raf != null) return;
+                              pointerTrackerRef.current.raf = window.requestAnimationFrame(() => {
+                                try {
+                                  let px = ev.clientX;
+                                  let py = ev.clientY;
+                                  if ((!px || !py) && ev.touches && ev.touches[0]) {
+                                    px = ev.touches[0].clientX;
+                                    py = ev.touches[0].clientY;
+                                  }
+                                  if (typeof px === 'number' && typeof py === 'number') {
+                                    const offset = (dragStartPointer as any).currentOffset;
+                                    if (offset) {
+                                      const nx = px - offset.x;
+                                      const ny = py - offset.y;
+                                      setOverlayPos({ x: nx, y: ny });
+                                    } else {
+                                      setOverlayPos({ x: px, y: py });
+                                    }
+                                  }
+                                } catch (e) {
+                                  // ignore
+                                } finally {
+                                  pointerTrackerRef.current.raf = null;
+                                }
+                              });
+                            };
+                            pointerTrackerRef.current.handler = handler;
+                            // listen to multiple move events for cross-browser coverage
+                            window.addEventListener('pointermove', handler, { passive: true });
+                            window.addEventListener('touchmove', handler, { passive: true });
+                            window.addEventListener('mousemove', handler, { passive: true });
+                          }
                         } else {
+                          console.debug('[DnD] dragStart no element rect', { clientX, clientY });
                           setOverlayPos({ x: clientX, y: clientY });
                         }
                       } catch (e) {
+                        console.debug('[DnD] dragStart failed computing rect', e);
                         setOverlayPos({ x: clientX, y: clientY });
                       }
                     }
@@ -219,21 +291,45 @@ export default function JuegoPage() {
                 onDragMove={(event) => {
                   try {
                     const delta: any = (event as any).delta;
+                    const act: any = (event as any).activatorEvent;
+                    // prefer delta if available (more stable), otherwise use activatorEvent coords
                     if (dragStartPointer.current && delta) {
+                      // base client coords are start + delta
                       const baseX = dragStartPointer.current.x + (delta.x ?? 0);
                       const baseY = dragStartPointer.current.y + (delta.y ?? 0);
                       const offset = (dragStartPointer as any).currentOffset;
                       if (offset) {
-                        setOverlayPos({ x: baseX - offset.x, y: baseY - offset.y });
+                        const x = baseX - offset.x;
+                        const y = baseY - offset.y;
+                        // if pointer tracker is active, skip DnD-kit onDragMove updates to avoid conflicts
+                        if (pointerTrackerRef.current.handler) return;
+                        console.log('[DnD] dragMove delta', { baseX, baseY, offset, x, y });
+                        setOverlayPos({ x, y });
                       } else {
+                        console.debug('[DnD] dragMove delta no offset', { baseX, baseY });
                         setOverlayPos({ x: baseX, y: baseY });
                       }
-                    } else {
-                      // fallback to activatorEvent coords
-                      const act: any = (event as any).activatorEvent;
-                      const clientX = act?.clientX ?? (act?.nativeEvent ? act.nativeEvent.clientX : undefined);
-                      const clientY = act?.clientY ?? (act?.nativeEvent ? act.nativeEvent.clientY : undefined);
-                      if (typeof clientX === 'number' && typeof clientY === 'number') setOverlayPos({ x: clientX, y: clientY });
+                    } else if (act) {
+                      let clientX = act?.clientX ?? (act?.nativeEvent ? act.nativeEvent.clientX : undefined);
+                      let clientY = act?.clientY ?? (act?.nativeEvent ? act.nativeEvent.clientY : undefined);
+                      if (!clientX && act?.touches && act.touches[0]) {
+                        clientX = act.touches[0].clientX;
+                        clientY = act.touches[0].clientY;
+                      }
+                      if (typeof clientX === 'number' && typeof clientY === 'number') {
+                        const offset = (dragStartPointer as any).currentOffset;
+                        if (offset) {
+                          const x = clientX - offset.x;
+                          const y = clientY - offset.y;
+                          if (pointerTrackerRef.current.handler) return;
+                          console.log('[DnD] dragMove activator', { clientX, clientY, offset, x, y });
+                          setOverlayPos({ x, y });
+                        } else {
+                          if (pointerTrackerRef.current.handler) return;
+                          console.log('[DnD] dragMove activator no offset', { clientX, clientY });
+                          setOverlayPos({ x: clientX, y: clientY });
+                        }
+                      }
                     }
                   } catch (e) {
                     // ignore
@@ -243,6 +339,22 @@ export default function JuegoPage() {
                   const { active, over } = event;
                   setActiveId(null);
                   setOverlayPos(null);
+                  // cleanup pointer tracker listeners
+                  try {
+                    const handler = pointerTrackerRef.current.handler;
+                    if (handler) {
+                      window.removeEventListener('pointermove', handler);
+                      window.removeEventListener('touchmove', handler);
+                      window.removeEventListener('mousemove', handler);
+                      pointerTrackerRef.current.handler = undefined;
+                    }
+                    if (pointerTrackerRef.current.raf) {
+                      window.cancelAnimationFrame(pointerTrackerRef.current.raf as number);
+                      pointerTrackerRef.current.raf = null;
+                    }
+                  } catch (e) {
+                    // ignore
+                  }
                   if (!over) return;
 
                   // si se soltó sobre otra carta, reordenar
@@ -302,15 +414,30 @@ export default function JuegoPage() {
                   )}
                 </div>
               {/* Drag overlay muestra la carta mientras se arrastra fuera del flujo normal */}
-              <DragOverlay>
-                {activeId ? (
+              {/* Keep a DragOverlay for dnd-kit internals but render a portal overlay positioned using overlayPos
+                  to avoid clipping/transform issues on small screens. */}
+              <DragOverlay />
+
+              {activeId && overlayPos && typeof document !== 'undefined' ? (
+                createPortal(
                   (() => {
                     const carta = cartasDB[activeId];
                     const fallback = { codigo: activeId, nombre: activeId, atributos: {} } as any;
-                    return <div className="w-40 pointer-events-none z-50"><CartaComponent carta={carta || fallback} /></div>;
-                  })()
-                ) : null}
-              </DragOverlay>
+                    // use saved bounding rect if available so overlay size matches the original
+                    const rect = dragStartPointer.current?.rect as DOMRect | undefined;
+                    const width = rect?.width ?? 160;
+                    const height = rect?.height ?? (width * 1.5);
+                    return (
+                      <div style={{ position: 'fixed', left: overlayPos.x, top: overlayPos.y, width, height, pointerEvents: 'none', zIndex: 9999 }}>
+                        <div className="w-full h-full pointer-events-none">
+                          <CartaComponent carta={carta || fallback} />
+                        </div>
+                      </div>
+                    );
+                  })(),
+                  document.body
+                )
+              ) : null}
             </DndContext>
             </main>
           </div>
