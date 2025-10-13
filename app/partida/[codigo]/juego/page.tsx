@@ -69,6 +69,102 @@ export default function JuegoPage() {
   const touchSensor = useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } });
   const sensors = useSensors(pointerSensor, touchSensor);
 
+  // helper: wait for the element with data-draggable-id to appear/move from startRect
+  // Uses a MutationObserver on the document to detect DOM changes and compares bounding rects.
+  const waitForElementRectChange = (id: string, startRect: DOMRect | undefined, timeout = 300) => {
+    return new Promise<void>((resolve) => {
+      if (!id) return resolve();
+      let finished = false;
+      const resolveNow = () => {
+        if (finished) return;
+        finished = true;
+        try { obs.disconnect(); } catch {}
+        try { clearTimeout(timer); } catch {}
+        resolve();
+      };
+
+      const checkOnce = () => {
+        try {
+          const el = document.querySelector(`[data-draggable-id="${id}"]`) as HTMLElement | null;
+          if (!el) {
+            // If element not present, consider it acceptable (it may have been removed when played)
+            return resolveNow();
+          }
+          const rect = el.getBoundingClientRect();
+          if (!startRect) return resolveNow();
+          const different = Math.abs(rect.left - startRect.left) > 1 || Math.abs(rect.top - startRect.top) > 1 || Math.abs(rect.width - startRect.width) > 1 || Math.abs(rect.height - startRect.height) > 1;
+          if (different) return resolveNow();
+        } catch {
+          return resolveNow();
+        }
+        return false;
+      };
+
+      // immediate check
+      try {
+        if (checkOnce()) return resolveNow();
+      } catch {
+        return resolveNow();
+      }
+
+      // Observe DOM mutations globally; when a change happens, re-check.
+      const obs = new MutationObserver(() => {
+        try {
+          if (checkOnce()) resolveNow();
+        } catch {
+          resolveNow();
+        }
+      });
+
+      try {
+        obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+      } catch {
+        // If observation fails for any reason, fallback to resolving after timeout
+      }
+
+      // Safety timeout
+      const timer = setTimeout(() => {
+        resolveNow();
+      }, timeout);
+    });
+  };
+
+  // helper to cleanup pointer tracker and then hide overlay after a short delay
+  const clearPointerTrackerAndOverlay = async (delay = 30, waitForId?: string, startRect?: DOMRect | undefined) => {
+    try {
+      const handler = pointerTrackerRef.current.handler;
+      if (handler) {
+        window.removeEventListener('pointermove', handler);
+        window.removeEventListener('touchmove', handler);
+        window.removeEventListener('mousemove', handler);
+        pointerTrackerRef.current.handler = undefined;
+      }
+      if (pointerTrackerRef.current.raf) {
+        window.cancelAnimationFrame(pointerTrackerRef.current.raf as number);
+        pointerTrackerRef.current.raf = null;
+      }
+    } catch {
+      // ignore
+    }
+
+    // if caller provided an id to wait for (reorder), poll until its rect changes or timeout
+    if (waitForId) {
+      try {
+        await waitForElementRectChange(waitForId, startRect, 300);
+      } catch {
+        // ignore
+      }
+    }
+
+    // wait a frame (and a small delay) so the reorder can paint and avoid flicker
+    window.requestAnimationFrame(() => {
+      setTimeout(() => {
+        setActiveId(null);
+        setOverlayPos(null);
+      }, delay);
+    });
+  };
+
   // Hook WS para lista de jugadores (reutiliza lógica existente)
   const { cartasDB: globalCartasDB, miJugador: miJugadorFromHook, handlers } = useGameData();
   const { jugadores: jugadoresLobby, connected, registerSession } = useLobbyRealTime(codigo, jugadorId, undefined, handlers.onPartidaIniciada, handlers.onCountsMessage);
@@ -416,107 +512,21 @@ export default function JuegoPage() {
                     // ignore
                   }
                 }}
+                onDragCancel={() => {
+                  // Ensure overlay is cleared when a drag is cancelled (e.g., escape, context loss)
+                  try {
+                    clearPointerTrackerAndOverlay(0);
+                  } catch {
+                    setActiveId(null);
+                    setOverlayPos(null);
+                  }
+                }}
                 onDragEnd={async (event) => {
                   const { active, over } = event;
-                  // helper: wait for the element with data-draggable-id to appear/move from startRect
-                  // Uses a MutationObserver on the document to detect DOM changes and compares bounding rects.
-                  const waitForElementRectChange = (id: string, startRect: DOMRect | undefined, timeout = 300) => {
-                    return new Promise<void>((resolve) => {
-                      if (!id) return resolve();
-                      let finished = false;
-                      const resolveNow = () => {
-                        if (finished) return;
-                        finished = true;
-                        try { obs.disconnect(); } catch {}
-                        try { clearTimeout(timer); } catch {}
-                        resolve();
-                      };
-
-                      const checkOnce = () => {
-                        try {
-                          const el = document.querySelector(`[data-draggable-id="${id}"]`) as HTMLElement | null;
-                          if (!el) {
-                            // If element not present, consider it acceptable (it may have been removed when played)
-                            return resolveNow();
-                          }
-                          const rect = el.getBoundingClientRect();
-                          if (!startRect) return resolveNow();
-                          const different = Math.abs(rect.left - startRect.left) > 1 || Math.abs(rect.top - startRect.top) > 1 || Math.abs(rect.width - startRect.width) > 1 || Math.abs(rect.height - startRect.height) > 1;
-                          if (different) return resolveNow();
-                        } catch {
-                          return resolveNow();
-                        }
-                        return false;
-                      };
-
-                      // immediate check
-                      try {
-                        if (checkOnce()) return resolveNow();
-                      } catch {
-                        return resolveNow();
-                      }
-
-                      // Observe DOM mutations globally; when a change happens, re-check.
-                      const obs = new MutationObserver(() => {
-                        try {
-                          if (checkOnce()) resolveNow();
-                        } catch {
-                          resolveNow();
-                        }
-                      });
-
-                      try {
-                        obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
-                      } catch {
-                        // If observation fails for any reason, fallback to resolving after timeout
-                      }
-
-                      // Safety timeout
-                      const timer = setTimeout(() => {
-                        resolveNow();
-                      }, timeout);
-                    });
-                  };
-
-                  // helper to cleanup pointer tracker and then hide overlay after a short delay
-                  const clearPointerTrackerAndOverlay = async (delay = 30, waitForId?: string, startRect?: DOMRect | undefined) => {
-                    try {
-                      const handler = pointerTrackerRef.current.handler;
-                      if (handler) {
-                        window.removeEventListener('pointermove', handler);
-                        window.removeEventListener('touchmove', handler);
-                        window.removeEventListener('mousemove', handler);
-                        pointerTrackerRef.current.handler = undefined;
-                      }
-                      if (pointerTrackerRef.current.raf) {
-                        window.cancelAnimationFrame(pointerTrackerRef.current.raf as number);
-                        pointerTrackerRef.current.raf = null;
-                      }
-                    } catch {
-                      // ignore
-                    }
-
-                    // if caller provided an id to wait for (reorder), poll until its rect changes or timeout
-                    if (waitForId) {
-                      try {
-                        await waitForElementRectChange(waitForId, startRect, 300);
-                      } catch {
-                        // ignore
-                      }
-                    }
-
-                    // wait a frame (and a small delay) so the reorder can paint and avoid flicker
-                    window.requestAnimationFrame(() => {
-                      setTimeout(() => {
-                        setActiveId(null);
-                        setOverlayPos(null);
-                      }, delay);
-                    });
-                  };
 
                   // If drag was cancelled (no drop target), clear overlay immediately
                   if (!over) {
-                    clearPointerTrackerAndOverlay(0);
+                    await clearPointerTrackerAndOverlay(0);
                     return;
                   }
 
@@ -532,7 +542,7 @@ export default function JuegoPage() {
                     // allow a short moment for the DOM reorder to paint, then clear overlay to avoid flicker
                     // pass the id we waited for and the original rect so the helper can detect when it moved
                     const startRect = dragStartPointer.current?.rect as DOMRect | undefined;
-                    clearPointerTrackerAndOverlay(50, over.id as string, startRect);
+                    await clearPointerTrackerAndOverlay(50, over.id as string, startRect);
                     return;
                   }
 
@@ -566,9 +576,16 @@ export default function JuegoPage() {
                       // clear overlay after the play flow settles to avoid flicker when the card is removed
                       // If the card was removed from DOM (played), wait for the new mano layout to reflect
                       const startRect = dragStartPointer.current?.rect as DOMRect | undefined;
-                      clearPointerTrackerAndOverlay(50, playingId, startRect);
+                        await clearPointerTrackerAndOverlay(50, playingId, startRect);
                     }
                   }
+                    // Ensure overlay is cleared in the default case (e.g., dropped back on the same card)
+                    try {
+                      await clearPointerTrackerAndOverlay(0);
+                    } catch {
+                      setActiveId(null);
+                      setOverlayPos(null);
+                    }
                 }}
               >
                 <div className="bg-black/80 p-6 rounded-lg border border-orange-500/30">
