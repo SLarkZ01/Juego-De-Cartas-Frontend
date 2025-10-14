@@ -6,6 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import LobbyHeader from '@/components/lobby/LobbyHeader';
 import PlayersList from '@/components/lobby/PlayersList';
 import ManoJugador from '@/components/game/ManoJugador';
+import { useReorderHand } from '@/hooks/useReorderHand';
 import Mesa from '@/components/game/Mesa';
 import { partidaService, cartaService } from '@/services/partida.service';
 import { gameplayService } from '@/services/partida.service';
@@ -54,7 +55,22 @@ export default function JuegoPage() {
     }
     return fallback;
   };
-  const [manoOrder, setManoOrder] = useState<string[]>([]);
+  // useReorderHand: persistencia optimista del orden de la mano
+  const {
+    hand: manoOrder,
+    setHand: setManoOrder,
+    applyLocalReorder,
+    confirmReorder,
+    rollback,
+    saving: guardandoOrden
+  } = useReorderHand({
+    partidaCodigo: codigo,
+    initialHand: detalle?.miJugador?.cartasEnMano ?? [],
+    onPartidaResponse: (resp) => {
+      // Si backend devuelve el nuevo orden, sincronizar
+      if (resp && Array.isArray(resp.order)) setManoOrder(resp.order);
+    }
+  });
   const [activeId, setActiveId] = useState<string | null>(null);
   const lastPlayedRef = React.useRef<string | null>(null);
   const [overlayPos, setOverlayPos] = useState<{ x: number; y: number } | null>(null);
@@ -260,9 +276,9 @@ export default function JuegoPage() {
         // Ahora solicitar detalle con el jugadorId (si existe)
         const detalleResp = await partidaService.obtenerPartidaDetalle(codigo, localId || '');
         setDetalle(detalleResp);
-        // inicializar orden de la mano local desde el detalle
+        // inicializar orden de la mano local desde el detalle SOLO si el hook no tiene orden
         if (detalleResp && detalleResp.miJugador && Array.isArray(detalleResp.miJugador.cartasEnMano)) {
-          setManoOrder(detalleResp.miJugador.cartasEnMano);
+          if (!manoOrder || manoOrder.length === 0) setManoOrder(detalleResp.miJugador.cartasEnMano);
         }
         if (detalleResp && detalleResp.jugadorId && (!jugadorId || jugadorId !== detalleResp.jugadorId)) {
           setJugadorId(detalleResp.jugadorId);
@@ -536,8 +552,15 @@ export default function JuegoPage() {
                     const newIndex = manoOrder.indexOf(over.id as string);
                     if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
                       const next = arrayMove(manoOrder, oldIndex, newIndex);
-                      setManoOrder(next);
-                      // también notificar al backend si se desea persistir la orden
+                      // UI optimista: aplica localmente
+                      applyLocalReorder(next);
+                      // Persistir en backend (debounced si se desea, aquí inmediato)
+                      try {
+                        await confirmReorder(next);
+                      } catch (err) {
+                        rollback();
+                        setToastMessage(getErrorMessage(err, 'No se pudo guardar el orden de la mano.'));
+                      }
                     }
                     // allow a short moment for the DOM reorder to paint, then clear overlay to avoid flicker
                     // pass the id we waited for and the original rect so the helper can detect when it moved

@@ -101,6 +101,17 @@ export class PartidaService {
   }
 
   /**
+   * Guardar el nuevo orden de la mano del jugador
+   * El backend identifica al jugador por sesión/token
+   * @param codigo Código de la partida
+   * @param order Nuevo orden de la mano (array de IDs/códigos de carta)
+   */
+  async guardarOrdenMano(codigo: string, order: string[]): Promise<any> {
+    const response = await api.post(`/api/partidas/${codigo}/mano/reorder`, { order });
+    return response.data;
+  }
+
+  /**
    * Reconectar a una partida: marca al jugador como conectado en el servidor
    * Si se pasa jugadorId, se envía en el body; si no, el backend usará el token
    */
@@ -174,3 +185,6 @@ export class GameplayService {
 export const cartaService = new CartaService();
 export const partidaService = new PartidaService();
 export const gameplayService = new GameplayService();
+
+// Exportar función directa para el hook
+export const guardarOrdenMano = partidaService.guardarOrdenMano.bind(partidaService);
