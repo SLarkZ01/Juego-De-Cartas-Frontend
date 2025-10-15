@@ -15,6 +15,7 @@ import { useGameData } from '@/hooks/useGameData';
 import useTurnHandler from '@/hooks/useTurnHandler';
 import { readJugadorId, persistJugadorId } from '@/lib/partidaUtils';
 import { websocketService } from '@/lib/websocket';
+import { AccionWebSocket } from '@/types/api';
 import { DndContext, DragOverlay, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { restrictToWindowEdges } from '@dnd-kit/modifiers';
 import CartaComponent from '@/components/game/CartaComponent';
@@ -196,6 +197,37 @@ export default function JuegoPage() {
     atributoSeleccionado: atributoSeleccionado ?? detalle?.atributoSeleccionado ?? undefined,
     myPlayerId: detalle?.jugadorId ?? jugadorId,
   });
+
+  // Handler: select attribute by clicking the number (Option A)
+  const selectAtributo = async (atributo: 'poder' | 'defensa' | 'ki' | 'velocidad', cartaCodigo?: string) => {
+    try {
+      // Only allow if current client is the expected player
+      const myId = String((detalle?.jugadorId ?? jugadorId) || '');
+      const expected = expectedPlayerId ? String(expectedPlayerId) : '';
+      if (!expected || myId !== expected) {
+        setToastMessage('No puedes seleccionar atributos en este momento');
+        return;
+      }
+
+      // Build action payload and send via websocketService
+      const payload = {
+        accion: AccionWebSocket.SELECCIONAR_ATRIBUTO,
+        jugadorId: myId,
+        atributo: atributo,
+      } as any;
+
+      // optimistic UI: set local detalle.atributoSeleccionado so UI updates immediately
+      setDetalle((prev) => prev ? { ...prev, atributoSeleccionado: atributo } : prev);
+
+      await websocketService.sendAction(codigo, payload);
+      setToastMessage('Atributo enviado');
+      // rely on server broadcast (ATRIBUTO_SELECCIONADO) to fully confirm state
+    } catch (err) {
+      setToastMessage(getErrorMessage(err, 'Error enviando selección'));
+      // revert optimistic
+      setDetalle((prev) => prev ? { ...prev, atributoSeleccionado: prev?.atributoSeleccionado ?? undefined } : prev);
+    }
+  };
 
   // Evitar re-registrar la sesión varias veces
   const registeredRef = useRef(false);
@@ -703,7 +735,15 @@ export default function JuegoPage() {
                 <div className="bg-black/80 p-4 rounded-lg border border-orange-500/30">
                   <h3 className="text-lg text-white mb-2">Mi Mano</h3>
                   {detalle.miJugador && Array.isArray(detalle.miJugador.cartasEnMano) ? (
-                    <ManoJugador cartasCodigos={manoOrder.length ? manoOrder : detalle.miJugador.cartasEnMano} cartasDB={cartasDB} externalDnd controlledOrder={manoOrder.length ? manoOrder : detalle.miJugador.cartasEnMano} onOrderChange={(newOrder) => { setManoOrder(newOrder); }} />
+                    <ManoJugador
+                      cartasCodigos={manoOrder.length ? manoOrder : detalle.miJugador.cartasEnMano}
+                      cartasDB={cartasDB}
+                      externalDnd
+                      controlledOrder={manoOrder.length ? manoOrder : detalle.miJugador.cartasEnMano}
+                      onOrderChange={(newOrder) => { setManoOrder(newOrder); }}
+                      onSelectAtributo={selectAtributo}
+                      canSelectAtributo={Boolean(expectedPlayerId && String(expectedPlayerId) === String(detalle.jugadorId ?? jugadorId))}
+                    />
                   ) : (
                     <div className="text-sm text-gray-300">Esperando asignación de jugador... Por favor, asegúrate de estar registrado en la partida.</div>
                   )}
@@ -725,7 +765,7 @@ export default function JuegoPage() {
                     return (
                       <div style={{ position: 'fixed', left: overlayPos.x, top: overlayPos.y, width, height, pointerEvents: 'none', zIndex: 9999 }}>
                         <div className="w-full h-full pointer-events-none">
-                          <CartaComponent carta={carta || fallback} />
+                  <CartaComponent carta={carta || fallback} onSelectAtributo={selectAtributo} canSelect={Boolean(expectedPlayerId && String(expectedPlayerId) === String(detalle.jugadorId ?? jugadorId))} />
                         </div>
                       </div>
                     );

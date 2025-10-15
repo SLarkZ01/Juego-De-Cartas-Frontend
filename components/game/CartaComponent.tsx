@@ -7,12 +7,17 @@ interface CartaComponentProps {
   carta: Carta;
   mostrarAtributos?: boolean;
   className?: string;
+  // called when the player selects an attribute by clicking the number
+  onSelectAtributo?: (atributo: 'poder' | 'defensa' | 'ki' | 'velocidad', cartaCodigo?: string) => void;
+  // whether clicking to select is currently allowed (visual/guard)
+  canSelect?: boolean;
 }
 
 export default function CartaComponent({ 
   carta, 
   mostrarAtributos = true,
   className = '' 
+  , onSelectAtributo, canSelect = false
 }: CartaComponentProps) {
   // Posiciones aproximadas para los 4 atributos en la plantilla `public/CartaNormal.webp`.
   // Se usan clases absolute con porcentajes para facilitar ajustes responsivos.
@@ -72,11 +77,17 @@ export default function CartaComponent({
         {mostrarAtributos && (
           <>
             {/* Contenedor relativo para las posiciones absolutas */}
-            <div className="absolute inset-0 pointer-events-none z-30">
+            <div className="absolute inset-0 z-30">
               {/* ROJO - fuerza */}
                    <div className="absolute left-[20%] top-[69.2%] -translate-x-1/2 w-5 text-center">
                      {typeof carta.atributos === 'object' && carta.atributos && Object.keys(carta.atributos).length > 0 ? (
-                       <div className="text-white text-[8px] font-medium leading-none">{fuerza}</div>
+                       <div
+                         role={onSelectAtributo && canSelect ? 'button' : undefined}
+                         tabIndex={onSelectAtributo && canSelect ? 0 : -1}
+                         onClick={() => { if (onSelectAtributo && canSelect) onSelectAtributo('poder', carta.codigo); }}
+                         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onSelectAtributo && canSelect) { e.preventDefault(); onSelectAtributo('poder', carta.codigo); } }}
+                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none`}
+                       >{fuerza}</div>
                      ) : (
                        <div className="h-1.5 w-5 mx-auto" />
                      )}
@@ -85,7 +96,13 @@ export default function CartaComponent({
               {/* AZUL - defensa */}
                    <div className="absolute left-[39%] top-[69.2%] -translate-x-1/2 w-5 text-center">
                      {typeof carta.atributos === 'object' && carta.atributos && Object.keys(carta.atributos).length > 0 ? (
-                       <div className="text-white text-[8px] font-medium leading-none">{defensa}</div>
+                       <div
+                         role={onSelectAtributo && canSelect ? 'button' : undefined}
+                         tabIndex={onSelectAtributo && canSelect ? 0 : -1}
+                         onClick={() => { if (onSelectAtributo && canSelect) onSelectAtributo('defensa', carta.codigo); }}
+                         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onSelectAtributo && canSelect) { e.preventDefault(); onSelectAtributo('defensa', carta.codigo); } }}
+                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none`}
+                       >{defensa}</div>
                      ) : (
                        <div className="h-1.5 w-5 mx-auto" />
                      )}
@@ -94,7 +111,13 @@ export default function CartaComponent({
               {/* VERDE - ki */}
                    <div className="absolute left-[58%] top-[69.2%] -translate-x-1/2 w-5 text-center">
                      {typeof carta.atributos === 'object' && carta.atributos && Object.keys(carta.atributos).length > 0 ? (
-                       <div className="text-white text-[8px] font-medium leading-none">{ki}</div>
+                       <div
+                         role={onSelectAtributo && canSelect ? 'button' : undefined}
+                         tabIndex={onSelectAtributo && canSelect ? 0 : -1}
+                         onClick={() => { if (onSelectAtributo && canSelect) onSelectAtributo('ki', carta.codigo); }}
+                         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onSelectAtributo && canSelect) { e.preventDefault(); onSelectAtributo('ki', carta.codigo); } }}
+                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none`}
+                       >{ki}</div>
                      ) : (
                        <div className="h-1.5 w-5 mx-auto" />
                      )}
@@ -103,7 +126,13 @@ export default function CartaComponent({
               {/* AMARILLO - velocidad */}
                    <div className="absolute left-[78%] top-[69.2%] -translate-x-1/2 w-5 text-center">
                      {typeof carta.atributos === 'object' && carta.atributos && Object.keys(carta.atributos).length > 0 ? (
-                       <div className="text-black text-[8px] font-medium leading-none">{velocidad}</div>
+                       <div
+                         role={onSelectAtributo && canSelect ? 'button' : undefined}
+                         tabIndex={onSelectAtributo && canSelect ? 0 : -1}
+                         onClick={() => { if (onSelectAtributo && canSelect) onSelectAtributo('velocidad', carta.codigo); }}
+                         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onSelectAtributo && canSelect) { e.preventDefault(); onSelectAtributo('velocidad', carta.codigo); } }}
+                         className={`${canSelect ? 'cursor-pointer' : ''} text-black text-[8px] font-medium leading-none`}
+                       >{velocidad}</div>
                      ) : (
                        <div className="h-1.5 w-5 mx-auto" />
                      )}
