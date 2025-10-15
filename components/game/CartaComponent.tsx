@@ -7,6 +7,8 @@ interface CartaComponentProps {
   carta: Carta;
   mostrarAtributos?: boolean;
   className?: string;
+  // variant to adjust name size/position when rendering on the mesa
+  nameVariant?: 'default' | 'mesa';
   // called when the player selects an attribute by clicking the number
   onSelectAtributo?: (atributo: 'poder' | 'defensa' | 'ki' | 'velocidad', cartaCodigo?: string) => void;
   // whether clicking to select is currently allowed (visual/guard)
@@ -20,8 +22,12 @@ interface CartaComponentProps {
 export default function CartaComponent({ 
   carta, 
   mostrarAtributos = true,
-  className = '' 
-  , onSelectAtributo, canSelect = false, selectedAtributo = null, selectedCartaCodigo = null
+  className = '',
+  nameVariant = 'default',
+  onSelectAtributo,
+  canSelect = false,
+  selectedAtributo = null,
+  selectedCartaCodigo = null,
 }: CartaComponentProps) {
   // Posiciones aproximadas para los 4 atributos en la plantilla `public/CartaNormal.webp`.
   // Se usan clases absolute con porcentajes para facilitar ajustes responsivos.
@@ -49,17 +55,20 @@ export default function CartaComponent({
           priority={false}
         />
 
-        {/* Badge pequeño arriba-izquierda con el código/numero de carta (no tapa el diseño) */}
+        {/* Badge pequeño arriba-izquierda con el código/numero de carta (no tapa el diseño)
+            En la variante 'mesa' lo hacemos más pequeño para que encaje en cartas reducidas. */}
         {carta.codigo && (
-          <div className="absolute top-2 left-2 z-40 pointer-events-none">
-            <div className="bg-black/60 text-white text-xs font-bold px-2 py-1 rounded-md backdrop-blur-sm">{carta.codigo}</div>
+          <div className={`${nameVariant === 'mesa' ? 'absolute top-2 left-2' : 'absolute top-2 left-2'} z-40 pointer-events-none`}>
+            <div className={`${nameVariant === 'mesa' ? 'bg-black/60 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-sm backdrop-blur-sm' : 'bg-black/60 text-white text-[11px] font-bold px-1.5 py-0.5 rounded-sm backdrop-blur-sm'}`}>{carta.codigo}</div>
           </div>
         )}
 
-        {/* Nombre y subtítulo (posicionado en la franja superior bajo el logo) */}
-        <div className="absolute left-4 right-4 top-10 text-center pointer-events-none z-30">
-          <h3 className="text-black font-bold text-sm leading-tight truncate">{carta.nombre}</h3>
-          {carta.raza && <p className="text-yellow-200 text-xs">{carta.raza}</p>}
+        {/* Nombre y subtítulo (posicionado en la franja superior bajo el logo).
+            Cuando se renderiza en la mesa usamos la variante 'mesa' para hacer el
+            nombre más pequeño y ubicarlo más arriba, encajando justo debajo del logo. */}
+        <div className={`absolute left-4 right-4 ${nameVariant === 'mesa' ? 'top-7.5' : 'top-10'} text-center pointer-events-none z-30`}>
+          <h3 className={`${nameVariant === 'mesa' ? 'text-black font-bold text-[11px] leading-tight truncate' : 'text-black font-bold text-sm leading-tight truncate'}`}>{carta.nombre}</h3>
+          {carta.raza && <p className={`${nameVariant === 'mesa' ? 'text-yellow-200 text-[9px]' : 'text-yellow-200 text-xs'}`}>{carta.raza}</p>}
         </div>
 
         {/* Artwork dentro del círculo de la plantilla: posicionamos un contenedor absoluto con tamaño relativo */}
@@ -90,7 +99,7 @@ export default function CartaComponent({
                          tabIndex={onSelectAtributo && canSelect ? 0 : -1}
                          onClick={() => { if (onSelectAtributo && canSelect) onSelectAtributo('poder', carta.codigo); }}
                          onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onSelectAtributo && canSelect) { e.preventDefault(); onSelectAtributo('poder', carta.codigo); } }}
-                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none ${selectedAtributo === 'poder' && selectedCartaCodigo === carta.codigo ? 'animate-pulse drop-shadow-[0_0_6px_rgba(255,255,255,0.9)]' : ''}`}
+                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none ${selectedAtributo === 'poder' && selectedCartaCodigo === carta.codigo ? 'animate-[pulse_900ms_infinite] text-[#FFD54F] drop-shadow-[0_0_8px_rgba(255,213,79,0.9)] scale-105' : ''}`}
                        >{fuerza}</div>
                      ) : (
                        <div className="h-1.5 w-5 mx-auto" />
@@ -105,7 +114,7 @@ export default function CartaComponent({
                          tabIndex={onSelectAtributo && canSelect ? 0 : -1}
                          onClick={() => { if (onSelectAtributo && canSelect) onSelectAtributo('defensa', carta.codigo); }}
                          onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onSelectAtributo && canSelect) { e.preventDefault(); onSelectAtributo('defensa', carta.codigo); } }}
-                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none ${selectedAtributo === 'defensa' && selectedCartaCodigo === carta.codigo ? 'animate-pulse drop-shadow-[0_0_6px_rgba(255,255,255,0.9)]' : ''}`}
+                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none ${selectedAtributo === 'defensa' && selectedCartaCodigo === carta.codigo ? 'animate-[pulse_900ms_infinite] text-[#FFD54F] drop-shadow-[0_0_8px_rgba(255,213,79,0.9)] scale-105' : ''}`}
                        >{defensa}</div>
                      ) : (
                        <div className="h-1.5 w-5 mx-auto" />
@@ -120,7 +129,7 @@ export default function CartaComponent({
                          tabIndex={onSelectAtributo && canSelect ? 0 : -1}
                          onClick={() => { if (onSelectAtributo && canSelect) onSelectAtributo('ki', carta.codigo); }}
                          onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onSelectAtributo && canSelect) { e.preventDefault(); onSelectAtributo('ki', carta.codigo); } }}
-                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none ${selectedAtributo === 'ki' && selectedCartaCodigo === carta.codigo ? 'animate-pulse drop-shadow-[0_0_6px_rgba(255,255,255,0.9)]' : ''}`}
+                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none ${selectedAtributo === 'ki' && selectedCartaCodigo === carta.codigo ? 'animate-[pulse_900ms_infinite] text-[#FFD54F] drop-shadow-[0_0_8px_rgba(255,213,79,0.9)] scale-105' : ''}`}
                        >{ki}</div>
                      ) : (
                        <div className="h-1.5 w-5 mx-auto" />
@@ -135,7 +144,7 @@ export default function CartaComponent({
                          tabIndex={onSelectAtributo && canSelect ? 0 : -1}
                          onClick={() => { if (onSelectAtributo && canSelect) onSelectAtributo('velocidad', carta.codigo); }}
                          onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onSelectAtributo && canSelect) { e.preventDefault(); onSelectAtributo('velocidad', carta.codigo); } }}
-                         className={`${canSelect ? 'cursor-pointer' : ''} text-black text-[8px] font-medium leading-none ${selectedAtributo === 'velocidad' && selectedCartaCodigo === carta.codigo ? 'animate-pulse drop-shadow-[0_0_6px_rgba(0,0,0,0.9)]' : ''}`}
+                         className={`${canSelect ? 'cursor-pointer' : ''} text-black text-[8px] font-medium leading-none ${selectedAtributo === 'velocidad' && selectedCartaCodigo === carta.codigo ? 'animate-[pulse_900ms_infinite] text-[#FFD54F] drop-shadow-[0_0_8px_rgba(255,213,79,0.9)] scale-105' : ''}`}
                        >{velocidad}</div>
                      ) : (
                        <div className="h-1.5 w-5 mx-auto" />
@@ -147,7 +156,7 @@ export default function CartaComponent({
 
         {/* Indicador de transformaciones (usa atributos.transformaciones si está presente) */}
         {transformacionesCount > 0 && (
-          <div className="absolute top-3 right-3 bg-yellow-300/95 text-black px-2 py-0.5 rounded-full text-xs font-bold z-40">
+          <div className={`${nameVariant === 'mesa' ? 'absolute top-2 right-2 bg-yellow-300/95 text-black px-1.5 py-0.5 rounded-sm text-[9px] font-bold z-40' : 'absolute top-3 right-3 bg-yellow-300/95 text-black px-1.5 py-0.5 rounded-sm text-[11px] font-bold z-40'}`}>
             ⚡ {transformacionesCount}
           </div>
         )}

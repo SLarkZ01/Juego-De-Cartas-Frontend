@@ -199,5 +199,6 @@ export function useLobbyRealTime(
     connected,
     loading,
     registerSession,
+    client: clientRef.current,
   };
 }

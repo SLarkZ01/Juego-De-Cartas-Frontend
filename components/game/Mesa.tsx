@@ -3,6 +3,7 @@
 import React from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import { useGameData } from '@/hooks/useGameData';
+import { cartaService } from '@/services/partida.service';
 import type { Carta } from '@/types/api';
 import CartaComponent from '@/components/game/CartaComponent';
 import { useEffect } from 'react';
@@ -16,7 +17,7 @@ export default function Mesa({ className = '' }: Props) {
   // Intentar cargar imagen desde public; si no existe, usar un fallback de color
   const bgStyle: React.CSSProperties = { backgroundImage: "url('/mesa.webp')" };
 
-  const { cartasEnMesa, rondaResultado, resolviendo: resolviendoFlag, completeResolution } = useGameData();
+  const { cartasEnMesa, rondaResultado, resolviendo: resolviendoFlag, completeResolution, cartasDB, setCartasDB } = useGameData();
   const [resolviendo, setResolviendo] = React.useState(false);
 
   // Simple collect animation: clones cards and animate to target avatar element (by selector)
@@ -76,18 +77,48 @@ export default function Mesa({ className = '' }: Props) {
 
   // Small renderer for a carta in the mesa
   const CartaMesa = ({ carta, idx }: { carta: any; idx: number }) => {
-    const fakeCarta: Carta = {
-      codigo: carta.codigoCarta || String(carta.codigo || carta.codigoCarta),
+    const code = String(carta.codigoCarta ?? carta.codigo ?? carta.datos?.codigo ?? '');
+    // prefer card from cartasDB to render full info
+    const fullCarta: Carta = cartasDB && cartasDB[code] ? (cartasDB[code] as Carta) : {
+      codigo: code,
       nombre: carta.nombreCarta || carta.nombre || '',
-      imagenUrl: carta.imagen || carta.imagenUrl,
+      imagenUrl: carta.imagen || carta.imagenUrl || undefined,
       atributos: {},
-    };
+    } as Carta;
+
     return (
       <div data-mesa-card-index={idx} className="absolute" style={{ left: `${10 + idx * 14}%`, top: `${20 + (idx % 2) * 6}%`, width: '120px' }}>
-        <CartaComponent carta={fakeCarta} mostrarAtributos={false} />
-      </div>
+          <CartaComponent carta={fullCarta} mostrarAtributos={true} nameVariant="mesa" />
+        </div>
     );
   };
+
+  // Ensure full card data is available in cartasDB for cards played on mesa
+  useEffect(() => {
+    if (!cartasEnMesa || cartasEnMesa.length === 0) return;
+    (async () => {
+      try {
+        const missingCodes: string[] = [];
+        (cartasEnMesa as any[]).forEach((c) => {
+          const code = String(c.codigoCarta ?? c.codigo ?? c.datos?.codigo ?? '');
+          if (code && (!cartasDB || !cartasDB[code])) missingCodes.push(code);
+        });
+
+        // fetch missing codes sequentially (could be parallel but keep gentle)
+        for (const code of missingCodes) {
+          try {
+            const full = await cartaService.obtenerCartaPorCodigo(code);
+            if (full && full.codigo) setCartasDB((prev) => ({ ...(prev || {}), [full.codigo]: full }));
+          } catch (e) {
+            // ignore individual card fetch errors
+            console.warn('[Mesa] failed to fetch carta detail', code, e);
+          }
+        }
+      } catch (e) {
+        console.warn('[Mesa] error ensuring cartasDB', e);
+      }
+    })();
+  }, [cartasEnMesa, cartasDB, setCartasDB]);
 
   // When rondaResultado appears in useGameData, perform animation and then call completeResolution
   useEffect(() => {

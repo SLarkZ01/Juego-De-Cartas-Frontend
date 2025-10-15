@@ -13,6 +13,7 @@ import { gameplayService } from '@/services/partida.service';
 import { useLobbyRealTime } from '@/hooks/useLobbyRealTime';
 import { useGameData } from '@/hooks/useGameData';
 import useTurnHandler from '@/hooks/useTurnHandler';
+import usePartidaPanelSync from '@/hooks/usePartidaPanelSync';
 import { readJugadorId, persistJugadorId } from '@/lib/partidaUtils';
 import { websocketService } from '@/lib/websocket';
 import { AccionWebSocket } from '@/types/api';
@@ -186,13 +187,48 @@ export default function JuegoPage() {
 
   // Hook WS para lista de jugadores (reutiliza lógica existente)
   const { cartasDB: globalCartasDB, miJugador: miJugadorFromHook, handlers, cartasEnMesa, resolviendo, atributoSeleccionado } = useGameData();
-  const { jugadores: jugadoresLobby, connected, registerSession } = useLobbyRealTime(codigo, jugadorId, undefined, handlers.onPartidaIniciada, handlers.onCountsMessage);
+
+  // Create a local handler for partida messages coming from lobby WS that
+  // - delegates to the useGameData handler (to keep internal updates)
+  // - refreshes the private 'detalle' from the backend when useful (e.g., turno change)
+  const onLobbyPartidaMessage = async (payload: unknown) => {
+    try {
+      // let useGameData process the message first (it updates cards DB / mesa etc)
+      try { handlers.onPartidaIniciada?.(payload); } catch (e) { console.warn('[JuegoPage] handlers.onPartidaIniciada error', e); }
+
+      // If payload contains possible partida state changes (turnoActual etc), refresh detalle
+      if (!payload || typeof payload !== 'object') return;
+      const p = payload as Record<string, any>;
+
+      // Heuristics: if payload contains turnoActual or partida.turnoActual or datos.turnoActual or jugadorId, refresh detalle
+      const hasTurno = typeof p.turnoActual === 'string' || (p.partida && typeof p.partida.turnoActual === 'string') || (p.datos && typeof p.datos.turnoActual === 'string');
+      const hasJugadorId = typeof p.jugadorId === 'string' || (p.partida && typeof p.partida.jugadorId === 'string');
+      if (hasTurno || hasJugadorId) {
+        const myId = detalle?.jugadorId ?? jugadorId;
+        if (myId) {
+          try {
+            const nuevo = await partidaService.obtenerPartidaDetalle(codigo, myId);
+            if (nuevo) setDetalle(nuevo);
+          } catch (e) {
+            console.warn('[JuegoPage] failed to refresh detalle after partida message', e);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[JuegoPage] onLobbyPartidaMessage error', e);
+    }
+  };
+
+  const { jugadores: jugadoresLobby, connected, registerSession, client } = useLobbyRealTime(codigo, jugadorId, undefined, onLobbyPartidaMessage, handlers.onCountsMessage);
+
+  // Use the low-level client to sync the players panel from PartidaResponse messages
+  const { jugadores: jugadoresPanel, turnoActual } = usePartidaPanelSync(client ?? null, codigo, detalle?.jugadorId ?? jugadorId);
 
   // Turn handler: determine if current player can drop to mesa
   const cartasEnMesaCountFromHandler = Array.isArray(cartasEnMesa) ? cartasEnMesa.length : 0;
   const { expectedPlayerId, canDropToMesa } = useTurnHandler({
-    players: jugadoresLobby as unknown as { id: string; orden?: number; numeroCartas?: number }[] | undefined,
-    turnoActual: detalle?.turnoActual,
+    players: (jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby) as unknown as { id: string; orden?: number; numeroCartas?: number }[] | undefined,
+    turnoActual: (turnoActual ?? detalle?.turnoActual) as string | undefined,
     cartasEnMesaCount: cartasEnMesaCountFromHandler,
     atributoSeleccionado: atributoSeleccionado ?? detalle?.atributoSeleccionado ?? undefined,
     myPlayerId: detalle?.jugadorId ?? jugadorId,
@@ -459,7 +495,7 @@ export default function JuegoPage() {
 
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mt-6">
             <aside className="lg:col-span-1">
-              <PlayersList jugadores={jugadoresLobby as unknown as JugadorPublic[]} partidaTurno={detalle.turnoActual} />
+              <PlayersList jugadores={(jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby) as unknown as JugadorPublic[]} partidaTurno={turnoActual ?? detalle?.turnoActual} />
             </aside>
 
             <main className="lg:col-span-3 space-y-6">
