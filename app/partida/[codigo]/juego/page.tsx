@@ -12,7 +12,9 @@ import { partidaService, cartaService } from '@/services/partida.service';
 import { gameplayService } from '@/services/partida.service';
 import { useLobbyRealTime } from '@/hooks/useLobbyRealTime';
 import { useGameData } from '@/hooks/useGameData';
+import useTurnHandler from '@/hooks/useTurnHandler';
 import { readJugadorId, persistJugadorId } from '@/lib/partidaUtils';
+import { websocketService } from '@/lib/websocket';
 import { DndContext, DragOverlay, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { restrictToWindowEdges } from '@dnd-kit/modifiers';
 import CartaComponent from '@/components/game/CartaComponent';
@@ -182,8 +184,18 @@ export default function JuegoPage() {
   };
 
   // Hook WS para lista de jugadores (reutiliza lógica existente)
-  const { cartasDB: globalCartasDB, miJugador: miJugadorFromHook, handlers } = useGameData();
+  const { cartasDB: globalCartasDB, miJugador: miJugadorFromHook, handlers, cartasEnMesa, resolviendo, atributoSeleccionado } = useGameData();
   const { jugadores: jugadoresLobby, connected, registerSession } = useLobbyRealTime(codigo, jugadorId, undefined, handlers.onPartidaIniciada, handlers.onCountsMessage);
+
+  // Turn handler: determine if current player can drop to mesa
+  const cartasEnMesaCountFromHandler = Array.isArray(cartasEnMesa) ? cartasEnMesa.length : 0;
+  const { expectedPlayerId, canDropToMesa } = useTurnHandler({
+    players: jugadoresLobby as unknown as { id: string; orden?: number; numeroCartas?: number }[] | undefined,
+    turnoActual: detalle?.turnoActual,
+    cartasEnMesaCount: cartasEnMesaCountFromHandler,
+    atributoSeleccionado: atributoSeleccionado ?? detalle?.atributoSeleccionado ?? undefined,
+    myPlayerId: detalle?.jugadorId ?? jugadorId,
+  });
 
   // Evitar re-registrar la sesión varias veces
   const registeredRef = useRef(false);
@@ -199,6 +211,18 @@ export default function JuegoPage() {
       }
     }
   }, [connected, jugadorId, registerSession]);
+
+  // Expose current partida codigo globally so useGameData can auto-subscribe (opt-in)
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        (window as any).__CURRENT_PARTIDA_CODIGO = codigo;
+      }
+    } catch {}
+    return () => {
+      try { if (typeof window !== 'undefined') (window as any).__CURRENT_PARTIDA_CODIGO = undefined; } catch {}
+    };
+  }, [codigo]);
 
   // cleanup pointer tracker if component unmounts
   useEffect(() => {
@@ -347,6 +371,26 @@ export default function JuegoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [codigo, jugadorId]);
 
+  // Suscribir a errores dirigidos al usuario via WebSocketService
+  useEffect(() => {
+    if (!codigo) return;
+    let mounted = true;
+    try {
+      websocketService.subscribeToUserErrors(codigo, (err) => {
+        if (!mounted) return;
+        const message = err?.message || 'Error del servidor';
+        setToastMessage(String(message));
+      }).catch((e) => console.warn('[JuegoPage] subscribeToUserErrors failed', e));
+    } catch (e) {
+      console.warn('[JuegoPage] subscribeToUserErrors threw', e);
+    }
+
+    return () => {
+      mounted = false;
+      try { websocketService.unsubscribeUserErrors(codigo); } catch (e) { /* ignore */ }
+    };
+  }, [codigo]);
+
   // Si no hay detalle, mostrar loading
   if (!detalle) {
     return (
@@ -372,6 +416,7 @@ export default function JuegoPage() {
                 sensors={sensors}
                 modifiers={[restrictToWindowEdges]}
                 onDragStart={(event) => {
+                  if (resolviendo) return;
                   setActiveId(event.active.id as string);
                   // record pointer start if available and save the dragged element rect
                     try {
@@ -538,6 +583,11 @@ export default function JuegoPage() {
                   }
                 }}
                 onDragEnd={async (event) => {
+                  if (resolviendo) {
+                    // ignore drops while resolving
+                    try { await clearPointerTrackerAndOverlay(0); } catch { setActiveId(null); setOverlayPos(null); }
+                    return;
+                  }
                   const { active, over } = event;
 
                   // If drag was cancelled (no drop target), clear overlay immediately
@@ -583,6 +633,30 @@ export default function JuegoPage() {
                   if (over.id === 'mesa') {
                     const playingId = active.id as string | undefined;
                     if (!playingId) return;
+
+                    // Enforce turn rules: only allow dropping to mesa if canDropToMesa
+                    if (!canDropToMesa) {
+                      const myId = String((detalle?.jugadorId ?? jugadorId) || '');
+                      const expected = expectedPlayerId ? String(expectedPlayerId) : '';
+                      // If it's not your turn, always inform that first
+                      if (!expected || myId !== expected) {
+                        setToastMessage('No es tu turno para jugar en la mesa');
+                      } else if (cartasEnMesaCountFromHandler === 0 && !(atributoSeleccionado ?? detalle?.atributoSeleccionado)) {
+                        // Only the expected player should be prompted to select the attribute
+                        setToastMessage('Debes seleccionar un atributo antes de jugar la primera carta.');
+                      } else {
+                        setToastMessage('No puedes jugar en este momento');
+                      }
+                      // Ensure overlay and active state cleared
+                      try {
+                        await clearPointerTrackerAndOverlay(0);
+                      } catch {
+                        setActiveId(null);
+                        setOverlayPos(null);
+                      }
+                      return;
+                    }
+
                     // evitar llamadas duplicadas por movimientos bruscos
                     if (lastPlayedRef.current === playingId) return;
                     lastPlayedRef.current = playingId;

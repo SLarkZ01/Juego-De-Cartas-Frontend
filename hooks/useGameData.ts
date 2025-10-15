@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Carta, JugadorPrivate } from '@/types/api';
+import { websocketService } from '@/lib/websocket';
 
 export function useGameData() {
   const [cartasDB, setCartasDB] = useState<Record<string, Carta>>({});
   const [atributoSeleccionado, setAtributoSeleccionado] = useState<string | null>(null);
   const [miJugador, setMiJugador] = useState<JugadorPrivate | null>(null);
   const [cartasEnMesa, setCartasEnMesa] = useState<Array<{ jugadorId: string; codigoCarta: string; nombreCarta?: string }>>([]);
+  const [resolviendo, setResolviendo] = useState(false);
+  const [rondaResultado, setRondaResultado] = useState<any | null>(null);
 
   const loadCartasDB = useCallback(async () => {
     try {
@@ -60,19 +63,52 @@ export function useGameData() {
   }, [miJugador]);
 
   const onRondaResuelta = useCallback(async (event: unknown) => {
-    // refrescar mano de miJugador si tenemos su id
-    if (!miJugador?.id) return;
+    // Mark that a ronda is being resolved and store its payload so the UI (Mesa)
+    // can perform the collect animation before we clear the mesa and refresh.
     try {
-      const codigo = (event && typeof event === 'object' && 'codigo' in (event as any)) ? String((event as any).codigo) : undefined;
-      if (!codigo) return;
+      setRondaResultado(event ?? null);
+      setResolviendo(true);
+    } catch (e) {
+      console.warn('[useGameData] onRondaResuelta error', e);
+    }
+  }, [miJugador]);
+
+  // Called by the UI after animations complete to finalize the resolution:
+  // - refresh detalle (miJugador) from server
+  // - clear cartasEnMesa and atributoSeleccionado
+  // - unset resolviendo/rondaResultado
+  const completeResolution = useCallback(async () => {
+    try {
+      const codigo = (typeof window !== 'undefined' && (window as any).__CURRENT_PARTIDA_CODIGO) ? String((window as any).__CURRENT_PARTIDA_CODIGO) : undefined;
+      if (!codigo) {
+        // no partida context: just clear local state
+        setCartasEnMesa([]);
+        setAtributoSeleccionado(null);
+        setResolviendo(false);
+        setRondaResultado(null);
+        return;
+      }
+
+      if (!miJugador?.id) {
+        setCartasEnMesa([]);
+        setAtributoSeleccionado(null);
+        setResolviendo(false);
+        setRondaResultado(null);
+        return;
+      }
+
       const detalleRes = await fetch(`/api/partidas/${codigo}/detalle?jugadorId=${miJugador.id}`);
-      if (!detalleRes.ok) return;
-      const detalle = await detalleRes.json();
-      setMiJugador(detalle.miJugador);
+      if (detalleRes.ok) {
+        const detalle = await detalleRes.json();
+        setMiJugador(detalle.miJugador);
+      }
       setCartasEnMesa([]);
       setAtributoSeleccionado(null);
     } catch (e) {
-      console.warn('[useGameData] error refreshing detalle after ronda', e);
+      console.warn('[useGameData] completeResolution error', e);
+    } finally {
+      setResolviendo(false);
+      setRondaResultado(null);
     }
   }, [miJugador]);
 
@@ -108,13 +144,52 @@ export function useGameData() {
     }
   }, [miJugador]);
 
+  // Subscribe to WebSocket partida topics when a partida codigo is set in the app logic.
+  // The consumer should ensure this hook is mounted for the current partida page.
+  useEffect(() => {
+    // This hook doesn't know the current codigo; consumers can subscribe manually via websocketService
+    // But to help integration, if an external script sets window.__CURRENT_PARTIDA_CODIGO we can auto-subscribe (optional)
+    try {
+      const maybeCodigo = (typeof window !== 'undefined' && (window as any).__CURRENT_PARTIDA_CODIGO) ? String((window as any).__CURRENT_PARTIDA_CODIGO) : undefined;
+      if (!maybeCodigo) return;
+
+      let mounted = true;
+      (async () => {
+        try {
+          await websocketService.subscribeToPartidaWithHandlers(maybeCodigo, {
+            onPartidaIniciada: (ev) => { if (!mounted) return; onPartidaIniciada(ev); },
+            onAtributoSeleccionado: (ev) => { if (!mounted) return; onAtributoSeleccionado(ev); },
+            onCartaJugada: (ev) => { if (!mounted) return; onCartaJugada(ev); },
+            onRondaResuelta: (ev) => { if (!mounted) return; onRondaResuelta(ev); },
+            onCounts: (p) => { if (!mounted) return; onCountsMessage(p); },
+            onGeneric: (ev) => { /* no-op for now */ },
+          });
+        } catch (e) {
+          console.warn('[useGameData] subscribeToPartidaWithHandlers failed', e);
+        }
+      })();
+
+      return () => {
+        mounted = false;
+        try {
+          if (maybeCodigo) websocketService.unsubscribeFromPartida(maybeCodigo);
+        } catch {}
+      };
+    } catch (e) {
+      // ignore
+    }
+  }, [onPartidaIniciada, onAtributoSeleccionado, onCartaJugada, onRondaResuelta, onCountsMessage]);
+
   return {
     cartasDB,
     miJugador,
     cartasEnMesa,
     atributoSeleccionado,
+    resolviendo,
+    rondaResultado,
     handlers: { onPartidaIniciada, onAtributoSeleccionado, onCartaJugada, onTransformacion, onRondaResuelta, onCountsMessage },
     setMiJugador,
     setCartasDB,
+    completeResolution,
   };
 }

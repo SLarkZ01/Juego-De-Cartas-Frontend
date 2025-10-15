@@ -18,6 +18,7 @@ export default function PlayerItem({ jugador, esTuTurno }: Props) {
 
   return (
     <div
+      data-player-id={jugador.id}
       className={`p-3 rounded-lg border-2 transition-all ${
         esTuTurno
           ? 'bg-orange-600/20 border-orange-500 animate-pulse'

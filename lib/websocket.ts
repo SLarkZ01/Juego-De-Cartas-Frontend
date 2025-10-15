@@ -41,10 +41,12 @@ async function publishRegistrationWithRetry(client: Client, codigoPartida: strin
 export class WebSocketService {
   private client: Client | null = null;
   private subscriptions: Map<string, StompSubscription> = new Map();
+  private userErrorSubscriptions: Map<string, StompSubscription> = new Map();
   private readonly wsUrl: string;
 
   constructor() {
     this.wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:8080/ws';
+      this.userErrorSubscriptions = new Map();
   }
 
   /**
@@ -239,6 +241,71 @@ export class WebSocketService {
   }
 
   /**
+   * Suscribirse a una partida pero con handlers separados para eventos clave.
+   * Esto permite a los consumidores registrar callbacks específicos en lugar de
+   * manejar todo en un único onMessage genérico.
+   */
+  async subscribeToPartidaWithHandlers(
+    codigoPartida: string,
+    handlers: {
+      onPartidaIniciada?: (payload: EventoWebSocket) => void;
+      onCartaJugada?: (payload: EventoWebSocket) => void;
+      onRondaResuelta?: (payload: EventoWebSocket) => void;
+      onAtributoSeleccionado?: (payload: EventoWebSocket) => void;
+      onCounts?: (payload: unknown) => void;
+      onGeneric?: (payload: EventoWebSocket) => void;
+    }
+  ): Promise<void> {
+    // subscribe to the main partida topic using the existing method but forward to specific handlers
+    await this.subscribeToPartida(codigoPartida, (evento) => {
+      try {
+        switch (evento.tipo) {
+          case 'PARTIDA_INICIADA':
+            handlers.onPartidaIniciada?.(evento);
+            break;
+          case 'CARTA_JUGADA':
+            handlers.onCartaJugada?.(evento);
+            break;
+          case 'RONDA_COMPLETADA':
+            handlers.onRondaResuelta?.(evento);
+            break;
+          case 'ATRIBUTO_SELECCIONADO':
+            handlers.onAtributoSeleccionado?.(evento);
+            break;
+          default:
+            handlers.onGeneric?.(evento);
+            break;
+        }
+      } catch (err) {
+        console.warn('[websocketService] handler error', err);
+      }
+    });
+
+    // subscribe to counts topic if provided by server
+    try {
+      if (!this.client?.active) await this.connect();
+      const countsTopic = `/topic/partida/${codigoPartida}/counts`;
+      // avoid duplicate subscription
+      if (!this.subscriptions.has(countsTopic)) {
+        const sub = this.client!.subscribe(countsTopic, (msg: IMessage) => {
+          try {
+            if (!msg.body) return;
+            let parsed: unknown = null;
+            try { parsed = JSON.parse(msg.body); } catch { parsed = msg.body; }
+            handlers.onCounts?.(parsed);
+          } catch (e) {
+            console.warn('[websocketService] error parsing counts payload', e);
+          }
+        });
+        this.subscriptions.set(countsTopic, sub);
+        console.log(`📡 Suscrito a ${countsTopic} (counts)`);
+      }
+    } catch (err) {
+      console.warn('⚠️ No se pudo suscribir a counts topic:', err);
+    }
+  }
+
+  /**
    * Publicar acción SOLICITAR_ESTADO varias veces (retries con delays) para
    * forzar que el servidor envíe el PartidaResponse canónico si aún no lo hizo.
    */
@@ -297,6 +364,60 @@ export class WebSocketService {
       subscription.unsubscribe();
       this.subscriptions.delete(topic);
       console.log(`📡 Desuscrito de ${topic}`);
+    }
+
+    // Also remove counts subscription if present
+    const countsTopic = `/topic/partida/${codigoPartida}/counts`;
+    const countsSub = this.subscriptions.get(countsTopic);
+    if (countsSub) {
+      try { countsSub.unsubscribe(); } catch {}
+      this.subscriptions.delete(countsTopic);
+      console.log(`📡 Desuscrito de ${countsTopic}`);
+    }
+  }
+
+  /**
+   * Suscribirse al canal de errores dirigidos al usuario: /user/queue/partida/{codigo}/errors
+   */
+  async subscribeToUserErrors(codigoPartida: string, onError: (err: { message?: string }) => void): Promise<void> {
+    if (!this.client?.active) {
+      await this.connect();
+    }
+
+    const topic = `/user/queue/partida/${codigoPartida}/errors`;
+    if (this.userErrorSubscriptions.has(topic)) return;
+
+    try {
+      const subscription = this.client!.subscribe(topic, (message: IMessage) => {
+        try {
+          const raw = message.body;
+          if (!raw) return;
+          let parsed: unknown = null;
+          try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+          const payload = parsed as any;
+          const msg = (payload && (payload.message || payload.error || payload.msg)) || String(raw || '');
+          onError({ message: String(msg) });
+        } catch (err) {
+          console.warn('Error procesando UserErrorEvent WS:', err);
+        }
+      });
+
+      this.userErrorSubscriptions.set(topic, subscription);
+      console.log(`📡 Suscrito a ${topic} (user errors)`);
+    } catch (err) {
+      console.warn('No se pudo suscribir a user errors:', err);
+    }
+  }
+
+  unsubscribeUserErrors(codigoPartida: string): void {
+    const topic = `/user/queue/partida/${codigoPartida}/errors`;
+    const subscription = this.userErrorSubscriptions.get(topic);
+    if (subscription) {
+      try {
+        subscription.unsubscribe();
+      } catch {}
+      this.userErrorSubscriptions.delete(topic);
+      console.log(`📡 Desuscrito de ${topic} (user errors)`);
     }
   }
 
