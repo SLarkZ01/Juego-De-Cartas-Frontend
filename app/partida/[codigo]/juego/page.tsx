@@ -548,6 +548,15 @@ export default function JuegoPage() {
 
                   // si se soltó sobre otra carta, reordenar
                   if (over.id && active.id && over.id !== 'mesa' && over.id !== active.id) {
+                    // read target element rect BEFORE mutating the DOM so the helper can detect the movement
+                    let targetRect: DOMRect | undefined = undefined;
+                    try {
+                      const targetEl = document.querySelector(`[data-draggable-id="${String(over.id)}"]`) as HTMLElement | null;
+                      if (targetEl) targetRect = targetEl.getBoundingClientRect();
+                    } catch {
+                      // ignore
+                    }
+
                     const oldIndex = manoOrder.indexOf(active.id as string);
                     const newIndex = manoOrder.indexOf(over.id as string);
                     if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
@@ -562,10 +571,11 @@ export default function JuegoPage() {
                         setToastMessage(getErrorMessage(err, 'No se pudo guardar el orden de la mano.'));
                       }
                     }
+
                     // allow a short moment for the DOM reorder to paint, then clear overlay to avoid flicker
-                    // pass the id we waited for and the original rect so the helper can detect when it moved
-                    const startRect = dragStartPointer.current?.rect as DOMRect | undefined;
-                    await clearPointerTrackerAndOverlay(50, over.id as string, startRect);
+                    // pass the id we waited for and the targetRect we captured before DOM mutation so the helper can detect when it moved
+                    const startRect = targetRect ?? dragStartPointer.current?.rect;
+                    await clearPointerTrackerAndOverlay(50, over.id as string, startRect as DOMRect | undefined);
                     return;
                   }
 
