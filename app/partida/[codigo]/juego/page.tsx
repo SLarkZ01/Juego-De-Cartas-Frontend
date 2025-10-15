@@ -199,6 +199,10 @@ export default function JuegoPage() {
   });
 
   // Handler: select attribute by clicking the number (Option A)
+  // local UI selection state for optimistic feedback
+  const [selectedAtributoLocal, setSelectedAtributoLocal] = useState<string | null>(null);
+  const [selectedCartaLocal, setSelectedCartaLocal] = useState<string | null>(null);
+
   const selectAtributo = async (atributo: 'poder' | 'defensa' | 'ki' | 'velocidad', cartaCodigo?: string) => {
     try {
       // Only allow if current client is the expected player
@@ -214,9 +218,12 @@ export default function JuegoPage() {
         accion: AccionWebSocket.SELECCIONAR_ATRIBUTO,
         jugadorId: myId,
         atributo: atributo,
+        cartaCodigo: cartaCodigo,
       } as any;
 
-      // optimistic UI: set local detalle.atributoSeleccionado so UI updates immediately
+      // optimistic UI: set local detalle.atributoSeleccionado and local selection markers
+      setSelectedAtributoLocal(atributo);
+      setSelectedCartaLocal(cartaCodigo ?? null);
       setDetalle((prev) => prev ? { ...prev, atributoSeleccionado: atributo } : prev);
 
       await websocketService.sendAction(codigo, payload);
@@ -226,8 +233,20 @@ export default function JuegoPage() {
       setToastMessage(getErrorMessage(err, 'Error enviando selección'));
       // revert optimistic
       setDetalle((prev) => prev ? { ...prev, atributoSeleccionado: prev?.atributoSeleccionado ?? undefined } : prev);
+      setSelectedAtributoLocal(null);
+      setSelectedCartaLocal(null);
     }
   };
+
+  // when server broadcasts atributoSeleccionado via useGameData, we should clear the optimistic local state
+  useEffect(() => {
+    try {
+      if (atributoSeleccionado) {
+        setSelectedAtributoLocal(String(atributoSeleccionado));
+        // server-side event does not always include cartaCodigo; keep selectedCartaLocal as-is
+      }
+    } catch {}
+  }, [atributoSeleccionado]);
 
   // Evitar re-registrar la sesión varias veces
   const registeredRef = useRef(false);
@@ -743,6 +762,8 @@ export default function JuegoPage() {
                       onOrderChange={(newOrder) => { setManoOrder(newOrder); }}
                       onSelectAtributo={selectAtributo}
                       canSelectAtributo={Boolean(expectedPlayerId && String(expectedPlayerId) === String(detalle.jugadorId ?? jugadorId))}
+                      selectedAtributo={selectedAtributoLocal}
+                      selectedCartaCodigo={selectedCartaLocal}
                     />
                   ) : (
                     <div className="text-sm text-gray-300">Esperando asignación de jugador... Por favor, asegúrate de estar registrado en la partida.</div>

@@ -11,13 +11,17 @@ interface CartaComponentProps {
   onSelectAtributo?: (atributo: 'poder' | 'defensa' | 'ki' | 'velocidad', cartaCodigo?: string) => void;
   // whether clicking to select is currently allowed (visual/guard)
   canSelect?: boolean;
+  // name of atributo currently selected (local optimistic or server-confirmed)
+  selectedAtributo?: string | null;
+  // code of the card for which atributo was selected
+  selectedCartaCodigo?: string | null;
 }
 
 export default function CartaComponent({ 
   carta, 
   mostrarAtributos = true,
   className = '' 
-  , onSelectAtributo, canSelect = false
+  , onSelectAtributo, canSelect = false, selectedAtributo = null, selectedCartaCodigo = null
 }: CartaComponentProps) {
   // Posiciones aproximadas para los 4 atributos en la plantilla `public/CartaNormal.webp`.
   // Se usan clases absolute con porcentajes para facilitar ajustes responsivos.
@@ -86,7 +90,7 @@ export default function CartaComponent({
                          tabIndex={onSelectAtributo && canSelect ? 0 : -1}
                          onClick={() => { if (onSelectAtributo && canSelect) onSelectAtributo('poder', carta.codigo); }}
                          onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onSelectAtributo && canSelect) { e.preventDefault(); onSelectAtributo('poder', carta.codigo); } }}
-                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none`}
+                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none ${selectedAtributo === 'poder' && selectedCartaCodigo === carta.codigo ? 'animate-pulse drop-shadow-[0_0_6px_rgba(255,255,255,0.9)]' : ''}`}
                        >{fuerza}</div>
                      ) : (
                        <div className="h-1.5 w-5 mx-auto" />
@@ -101,7 +105,7 @@ export default function CartaComponent({
                          tabIndex={onSelectAtributo && canSelect ? 0 : -1}
                          onClick={() => { if (onSelectAtributo && canSelect) onSelectAtributo('defensa', carta.codigo); }}
                          onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onSelectAtributo && canSelect) { e.preventDefault(); onSelectAtributo('defensa', carta.codigo); } }}
-                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none`}
+                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none ${selectedAtributo === 'defensa' && selectedCartaCodigo === carta.codigo ? 'animate-pulse drop-shadow-[0_0_6px_rgba(255,255,255,0.9)]' : ''}`}
                        >{defensa}</div>
                      ) : (
                        <div className="h-1.5 w-5 mx-auto" />
@@ -116,7 +120,7 @@ export default function CartaComponent({
                          tabIndex={onSelectAtributo && canSelect ? 0 : -1}
                          onClick={() => { if (onSelectAtributo && canSelect) onSelectAtributo('ki', carta.codigo); }}
                          onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onSelectAtributo && canSelect) { e.preventDefault(); onSelectAtributo('ki', carta.codigo); } }}
-                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none`}
+                         className={`${canSelect ? 'cursor-pointer' : ''} text-white text-[8px] font-medium leading-none ${selectedAtributo === 'ki' && selectedCartaCodigo === carta.codigo ? 'animate-pulse drop-shadow-[0_0_6px_rgba(255,255,255,0.9)]' : ''}`}
                        >{ki}</div>
                      ) : (
                        <div className="h-1.5 w-5 mx-auto" />
@@ -131,7 +135,7 @@ export default function CartaComponent({
                          tabIndex={onSelectAtributo && canSelect ? 0 : -1}
                          onClick={() => { if (onSelectAtributo && canSelect) onSelectAtributo('velocidad', carta.codigo); }}
                          onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onSelectAtributo && canSelect) { e.preventDefault(); onSelectAtributo('velocidad', carta.codigo); } }}
-                         className={`${canSelect ? 'cursor-pointer' : ''} text-black text-[8px] font-medium leading-none`}
+                         className={`${canSelect ? 'cursor-pointer' : ''} text-black text-[8px] font-medium leading-none ${selectedAtributo === 'velocidad' && selectedCartaCodigo === carta.codigo ? 'animate-pulse drop-shadow-[0_0_6px_rgba(0,0,0,0.9)]' : ''}`}
                        >{velocidad}</div>
                      ) : (
                        <div className="h-1.5 w-5 mx-auto" />

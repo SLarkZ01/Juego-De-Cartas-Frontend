@@ -35,6 +35,8 @@ interface ManoJugadorProps {
   // forwarded props to allow attribute clicks from parent
   onSelectAtributo?: (atributo: 'poder' | 'defensa' | 'ki' | 'velocidad', cartaCodigo?: string) => void;
   canSelectAtributo?: boolean;
+  selectedAtributo?: string | null;
+  selectedCartaCodigo?: string | null;
 }
 
 /**
@@ -55,6 +57,8 @@ export default function ManoJugador({
   onDropToMesa,
   onSelectAtributo,
   canSelectAtributo,
+  selectedAtributo,
+  selectedCartaCodigo,
 }: ManoJugadorProps) {
   const [order, setOrder] = useState<string[]>(controlledOrder ?? cartasCodigos ?? []);
 
@@ -133,6 +137,8 @@ export default function ManoJugador({
                         className="w-full"
                         onSelectAtributo={onSelectAtributo}
                         canSelect={!!onSelectAtributo && !!canSelectAtributo}
+                        selectedAtributo={selectedAtributo}
+                        selectedCartaCodigo={selectedCartaCodigo}
                       />
                     </SortableCard>
                   );
@@ -164,6 +170,8 @@ export default function ManoJugador({
                         className="w-full"
                         onSelectAtributo={onSelectAtributo}
                         canSelect={!!onSelectAtributo && !!canSelectAtributo}
+                        selectedAtributo={selectedAtributo}
+                        selectedCartaCodigo={selectedCartaCodigo}
                       />
                     </SortableCard>
                   );
