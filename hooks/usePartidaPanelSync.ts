@@ -12,10 +12,49 @@ type JugadorPanel = {
 export function usePartidaPanelSync(client: Client | null, partidaCodigo: string | null, myJugadorId?: string | null) {
   const [jugadores, setJugadores] = useState<JugadorPanel[]>([]);
   const [turnoActual, setTurnoActual] = useState<string | null>(null);
+  const [turnoEsperado, setTurnoEsperado] = useState<string | null>(null);
 
   const handlePartidaMessage = useCallback((msg: IMessage) => {
     try {
       const body = JSON.parse(msg.body);
+      if (process.env.NODE_ENV === 'development') {
+        try { console.debug('[usePartidaPanelSync] WS raw partida message:', body); } catch {}
+      }
+      // If payload is an EventoWebSocket wrapper (has tipo/datos), handle known event types
+      if (body && typeof body === 'object' && typeof body.tipo === 'string') {
+        const tipo = String(body.tipo);
+        const datos = body.datos || body.data || body.payload || null;
+        if (process.env.NODE_ENV === 'development') {
+          try { console.debug('[usePartidaPanelSync] Evento WS tipo:', tipo, 'datos:', datos); } catch {}
+        }
+        // Handle TurnoCambiado event
+        if (tipo === 'TURNO_CAMBIADO' || tipo === 'TURN0_CAMBIADO' || tipo === 'TURNO_CAMBIO' || tipo === 'TURN_CHANGED') {
+          try {
+            const expected = datos?.expectedPlayerId ?? datos?.expectedPlayer ?? datos?.jugadorId ?? datos?.playerId ?? datos?.expected ?? null;
+            if (process.env.NODE_ENV === 'development') {
+              try { console.debug('[usePartidaPanelSync] detected turno cambiado, expected:', expected); } catch {}
+            }
+            if (expected && typeof expected === 'string') setTurnoEsperado(String(expected));
+          } catch (e) {
+            // ignore
+          }
+        }
+        // If event includes a partida snapshot inside datos, extract jugadores/turnoActual from there
+        if (datos && typeof datos === 'object' && Array.isArray(datos.jugadores)) {
+          const parsed = (datos.jugadores as any[]).map((j) => ({
+            id: j.id,
+            nombre: j.nombre ?? j.userId ?? String(j.id),
+            numeroCartas: typeof j.numeroCartas === 'number' ? j.numeroCartas : 0,
+            orden: typeof j.orden === 'number' ? j.orden : 0,
+            conectado: !!j.conectado,
+          }));
+          parsed.sort((a,b) => a.orden - b.orden);
+          setJugadores(parsed);
+          if (typeof datos.turnoActual === 'string') setTurnoActual(datos.turnoActual);
+          return;
+        }
+      }
+
       if (body && body.jugadores && Array.isArray(body.jugadores)) {
         const parsed = (body.jugadores as any[]).map((j) => ({
           id: j.id,
@@ -86,7 +125,7 @@ export function usePartidaPanelSync(client: Client | null, partidaCodigo: string
     };
   }, [client, partidaCodigo, handlePartidaMessage, handleCounts]);
 
-  return { jugadores, setJugadores, turnoActual, setTurnoActual };
+  return { jugadores, setJugadores, turnoActual, setTurnoActual, turnoEsperado, setTurnoEsperado };
 }
 
 export default usePartidaPanelSync;
