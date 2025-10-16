@@ -31,6 +31,7 @@ export function useLobbyRealTime(
 ) {
   const clientRef = useRef<Client | null>(null);
   const [jugadores, setJugadores] = useState<JugadorDTO[]>([]);
+  const [turnoActual, setTurnoActual] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -105,6 +106,8 @@ export function useLobbyRealTime(
               if (Array.isArray(maybeJugadores)) {
                 console.log('[useLobbyRealTime] Actualizando jugadores:', maybeJugadores);
                 setJugadores(maybeJugadores as JugadorDTO[]);
+                // detect turnoActual at root
+                if (typeof payload['turnoActual'] === 'string') setTurnoActual(String(payload['turnoActual']));
                 setLoading(false);
               } else {
                 const maybePartida = payload['partida'];
@@ -113,6 +116,9 @@ export function useLobbyRealTime(
                   if (Array.isArray(nestedJugadores)) {
                     console.log('[useLobbyRealTime] Actualizando jugadores (nested):', nestedJugadores);
                     setJugadores(nestedJugadores as JugadorDTO[]);
+                    // detect turnoActual nested inside partida
+                    const nestedTurn = (maybePartida as Record<string, unknown>)['turnoActual'];
+                    if (typeof nestedTurn === 'string') setTurnoActual(String(nestedTurn));
                     setLoading(false);
                     return;
                   }
@@ -124,6 +130,9 @@ export function useLobbyRealTime(
                   if (Array.isArray(datosJug)) {
                     console.log('[useLobbyRealTime] Actualizando jugadores (datos):', datosJug);
                     setJugadores(datosJug as JugadorDTO[]);
+                    // detect turnoActual nested inside datos
+                    const datosTurn = (maybeDatos as Record<string, unknown>)['turnoActual'];
+                    if (typeof datosTurn === 'string') setTurnoActual(String(datosTurn));
                     setLoading(false);
                     return;
                   }
@@ -200,5 +209,6 @@ export function useLobbyRealTime(
     loading,
     registerSession,
     client: clientRef.current,
+    turnoActual,
   };
 }

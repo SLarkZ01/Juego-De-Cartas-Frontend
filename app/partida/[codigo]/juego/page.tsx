@@ -219,16 +219,19 @@ export default function JuegoPage() {
     }
   };
 
-  const { jugadores: jugadoresLobby, connected, registerSession, client } = useLobbyRealTime(codigo, jugadorId, undefined, onLobbyPartidaMessage, handlers.onCountsMessage);
+  const { jugadores: jugadoresLobby, connected, registerSession, client, turnoActual: turnoLobby } = useLobbyRealTime(codigo, jugadorId, undefined, onLobbyPartidaMessage, handlers.onCountsMessage);
 
   // Use the low-level client to sync the players panel from PartidaResponse messages
-  const { jugadores: jugadoresPanel, turnoActual } = usePartidaPanelSync(client ?? null, codigo, detalle?.jugadorId ?? jugadorId);
+  const { jugadores: jugadoresPanel, turnoActual: turnoPanel } = usePartidaPanelSync(client ?? null, codigo, detalle?.jugadorId ?? jugadorId);
+
+  // Prefer the panel's turno (authoritative), then lobby stream, then detalle as last resort
+  const partidaTurno = (turnoPanel ?? turnoLobby ?? detalle?.turnoActual) as string | undefined;
 
   // Turn handler: determine if current player can drop to mesa
   const cartasEnMesaCountFromHandler = Array.isArray(cartasEnMesa) ? cartasEnMesa.length : 0;
   const { expectedPlayerId, canDropToMesa } = useTurnHandler({
     players: (jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby) as unknown as { id: string; orden?: number; numeroCartas?: number }[] | undefined,
-    turnoActual: (turnoActual ?? detalle?.turnoActual) as string | undefined,
+    turnoActual: partidaTurno,
     cartasEnMesaCount: cartasEnMesaCountFromHandler,
     atributoSeleccionado: atributoSeleccionado ?? detalle?.atributoSeleccionado ?? undefined,
     myPlayerId: detalle?.jugadorId ?? jugadorId,
@@ -495,7 +498,7 @@ export default function JuegoPage() {
 
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mt-6">
             <aside className="lg:col-span-1">
-              <PlayersList jugadores={(jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby) as unknown as JugadorPublic[]} partidaTurno={turnoActual ?? detalle?.turnoActual} />
+              <PlayersList jugadores={(jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby) as unknown as JugadorPublic[]} partidaTurno={partidaTurno} />
             </aside>
 
             <main className="lg:col-span-3 space-y-6">

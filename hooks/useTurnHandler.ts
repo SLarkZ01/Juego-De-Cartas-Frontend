@@ -26,8 +26,12 @@ export function useTurnHandler({ players, turnoActual, cartasEnMesaCount, atribu
 
     if (activos.length === 0) return null;
 
-    const start = activos.findIndex((p) => String(p.id) === String(turnoActual));
-    if (start === -1) return null;
+    let start = activos.findIndex((p) => String(p.id) === String(turnoActual));
+    // If turnoActual isn't found among active players (e.g., has 0 cards),
+    // fallback to the first active player to avoid blocking the UI.
+    if (start === -1) {
+      start = 0;
+    }
     const ordered = Array.from({ length: activos.length }, (_, i) => activos[(start + i) % activos.length]);
     return ordered[cartasEnMesaCount % ordered.length]?.id || null;
   }, [players, turnoActual, cartasEnMesaCount]);
