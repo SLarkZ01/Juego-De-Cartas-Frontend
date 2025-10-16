@@ -752,10 +752,57 @@ export default function JuegoPage() {
                     lastPlayedRef.current = playingId;
                     // eliminación optimista local: quitar la carta de la mano para que no permanezca visualmente
                     const previousOrder = manoOrder;
+                    // compute index in current visual hand before mutating
+                    const cardIndex = previousOrder.indexOf(playingId);
                     setManoOrder((prev) => prev.filter((c) => c !== playingId));
                     try {
-                      await gameplayService.jugarCarta(codigo, { jugadorId: detalle.jugadorId });
-                      setToastMessage('Carta jugada');
+                      // Primero, intentar publicar un PlayerDragEvent con `cardIndex` si el cliente STOMP existe
+                      let dragPublished = false;
+                      try {
+                        if (client && (client as any).active) {
+                          const playerName = detalle?.miJugador?.nombre ?? undefined;
+                          const eventPayload = {
+                            jugadorId: detalle.jugadorId,
+                            jugadorNombre: playerName,
+                            dragging: false,
+                            cardIndex: cardIndex >= 0 ? cardIndex : undefined,
+                            target: 'mesa',
+                          } as Record<string, unknown>;
+                          (client as any).publish({
+                            destination: `/app/partida/${codigo}/drag`,
+                            body: JSON.stringify(eventPayload),
+                            skipContentLengthHeader: true,
+                          });
+                          dragPublished = true;
+                          setToastMessage('Carta jugada (drag WS)');
+                        }
+                      } catch (pubErr) {
+                        console.warn('[JuegoPage] publicar drag WS falló:', pubErr);
+                        dragPublished = false;
+                      }
+
+                      if (!dragPublished) {
+                        // Si no se publicó el evento drag, intentar la acción JUGAR_CARTA por WS (incluyendo codigo)
+                        if (websocketService.isConnected()) {
+                          try {
+                            websocketService.sendAction(codigo, {
+                              accion: AccionWebSocket.JUGAR_CARTA,
+                              jugadorId: detalle.jugadorId,
+                              codigo: playingId,
+                            } as any);
+                            setToastMessage('Carta jugada (WS action)');
+                          } catch (wsErr) {
+                            console.warn('[JuegoPage] sendAction JUGAR_CARTA falló, usando REST fallback', wsErr);
+                            await gameplayService.jugarCarta(codigo, { jugadorId: detalle.jugadorId });
+                            setToastMessage('Carta jugada (REST)');
+                          }
+                        } else {
+                          console.warn('[JuegoPage] WS no conectado — usando REST fallback que puede jugar otra carta');
+                          setToastMessage('Conexión en tiempo real no disponible — la carta jugada puede no ser la seleccionada');
+                          await gameplayService.jugarCarta(codigo, { jugadorId: detalle.jugadorId });
+                        }
+                      }
+
                       // REFRESCAR detalle desde servidor para sincronizar número de cartas y mano
                       const nuevoDetalle = await partidaService.obtenerPartidaDetalle(codigo, detalle.jugadorId);
                       setDetalle(nuevoDetalle);
