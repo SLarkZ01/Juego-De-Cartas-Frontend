@@ -259,23 +259,43 @@ export class WebSocketService {
     // subscribe to the main partida topic using the existing method but forward to specific handlers
     await this.subscribeToPartida(codigoPartida, (evento) => {
       try {
-        switch (evento.tipo) {
-          case 'PARTIDA_INICIADA':
-            handlers.onPartidaIniciada?.(evento);
-            break;
-          case 'CARTA_JUGADA':
-            handlers.onCartaJugada?.(evento);
-            break;
-          case 'RONDA_COMPLETADA':
-            handlers.onRondaResuelta?.(evento);
-            break;
-          case 'ATRIBUTO_SELECCIONADO':
-            handlers.onAtributoSeleccionado?.(evento);
-            break;
-          default:
-            handlers.onGeneric?.(evento);
-            break;
-        }
+        switch (String(evento.tipo)) {
+            // partida/estado snapshots
+            case 'PARTIDA_INICIADA':
+            case 'PARTIDA_STATE':
+            case 'PARTIDA_ESTADO':
+              handlers.onPartidaIniciada?.(evento);
+              break;
+
+            // carta jugada
+            case 'CARTA_JUGADA':
+              handlers.onCartaJugada?.(evento);
+              break;
+
+            // ronda resuelta aliases
+            case 'RONDA_COMPLETADA':
+            case 'RONDA_RESUELTA':
+            case 'ROND A_COMPLETADA':
+              handlers.onRondaResuelta?.(evento);
+              break;
+
+            // atributo seleccionado
+            case 'ATRIBUTO_SELECCIONADO':
+            case 'ATRIBUTO_SELECCION':
+              handlers.onAtributoSeleccionado?.(evento);
+              break;
+
+            // turn change events - forward to generic so callers can handle if they want
+            case 'TURNO_CAMBIADO':
+            case 'TURN_CHANGED':
+            case 'TURN0_CAMBIADO':
+              handlers.onGeneric?.(evento);
+              break;
+
+            default:
+              handlers.onGeneric?.(evento);
+              break;
+          }
       } catch (err) {
         console.warn('[websocketService] handler error', err);
       }

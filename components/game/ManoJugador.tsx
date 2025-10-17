@@ -32,6 +32,7 @@ interface ManoJugadorProps {
   controlledOrder?: string[]; // si se pasa, ManoJugador se convierte en controlada
   externalDnd?: boolean; // si true, DndContext lo crea el padre
   onDropToMesa?: (codigo: string) => void; // callback cuando se suelta sobre la mesa
+  numeroCartas?: number; // opcional: número canónico de cartas en el mazo (desde servidor)
   // forwarded props to allow attribute clicks from parent
   onSelectAtributo?: (atributo: 'poder' | 'defensa' | 'ki' | 'velocidad', cartaCodigo?: string) => void;
   canSelectAtributo?: boolean;
@@ -55,6 +56,7 @@ export default function ManoJugador({
   controlledOrder,
   externalDnd = false,
   onDropToMesa,
+  numeroCartas,
   onSelectAtributo,
   canSelectAtributo,
   selectedAtributo,
@@ -108,7 +110,7 @@ export default function ManoJugador({
   return (
     <div className={`mano-jugador ${className}`}>
       <div className="flex items-center justify-between mb-2">
-        <div className="text-sm text-gray-200">Mi Mazo ({order.length})</div>
+        <div className="text-sm text-gray-200">Mi Mazo ({typeof numeroCartas === 'number' ? numeroCartas : order.length})</div>
       </div>
 
       <div className="relative">

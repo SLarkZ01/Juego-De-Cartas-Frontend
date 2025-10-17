@@ -17,6 +17,7 @@ import useTurnHandler from '@/hooks/useTurnHandler';
 import usePartidaPanelSync from '@/hooks/usePartidaPanelSync';
 import { readJugadorId, persistJugadorId } from '@/lib/partidaUtils';
 import { websocketService } from '@/lib/websocket';
+import api from '@/lib/api';
 import { AccionWebSocket } from '@/types/api';
 import { DndContext, DragOverlay, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { restrictToWindowEdges } from '@dnd-kit/modifiers';
@@ -187,43 +188,121 @@ export default function JuegoPage() {
   };
 
   // Hook WS para lista de jugadores (reutiliza lógica existente)
-  const { cartasDB: globalCartasDB, miJugador: miJugadorFromHook, handlers, cartasEnMesa, resolviendo, atributoSeleccionado } = useGameData();
+  const { cartasDB: globalCartasDB, miJugador: miJugadorFromHook, handlers, cartasEnMesa, resolviendo, atributoSeleccionado, setMiJugador } = useGameData();
 
   // Create a local handler for partida messages coming from lobby WS that
   // - delegates to the useGameData handler (to keep internal updates)
   // - refreshes the private 'detalle' from the backend when useful (e.g., turno change)
-  const onLobbyPartidaMessage = async (payload: unknown) => {
+  const lastDetalleFetchRef = React.useRef<number>(0);
+  const handlePartidaRef = React.useRef<((p: any) => void) | null>(null);
+
+  const onLobbyPartidaMessage = React.useCallback(async (payload: unknown) => {
     try {
       // let useGameData process the message first (it updates cards DB / mesa etc)
       try { handlers.onPartidaIniciada?.(payload); } catch (e) { console.warn('[JuegoPage] handlers.onPartidaIniciada error', e); }
+      // Forward jugadores from payload to the panel sync hook if present so counts update immediately
+      try {
+        const incoming = payload as Record<string, any>;
+        if (setJugadoresPanel && Array.isArray(incoming.jugadores)) {
+          try {
+            const myIdLocal = detalle?.jugadorId ?? jugadorId ?? undefined;
+            setJugadoresPanel(incoming.jugadores.map((j: any) => ({
+              id: j.id,
+              nombre: j.nombre ?? j.userId ?? String(j.id),
+              numeroCartas: typeof j.numeroCartas === 'number' ? j.numeroCartas : 0,
+              orden: typeof j.orden === 'number' ? j.orden : 0,
+              conectado: !!j.conectado,
+            })));
+          } catch (e) {
+            // ignore mapping errors
+          }
+        }
+      } catch {}
 
-      // If payload contains possible partida state changes (turnoActual etc), refresh detalle
-      if (!payload || typeof payload !== 'object') return;
+  if (!payload || typeof payload !== 'object') return;
+  // also let the players panel hook parse this payload (if exposed)
+  try { if (handlePartidaRef.current) handlePartidaRef.current(payload); } catch {}
       const p = payload as Record<string, any>;
+      const tipo = String(p.tipo ?? '').toUpperCase();
 
-      // Heuristics: if payload contains turnoActual or partida.turnoActual or datos.turnoActual or jugadorId, refresh detalle
-      const hasTurno = typeof p.turnoActual === 'string' || (p.partida && typeof p.partida.turnoActual === 'string') || (p.datos && typeof p.datos.turnoActual === 'string');
-      const hasJugadorId = typeof p.jugadorId === 'string' || (p.partida && typeof p.partida.jugadorId === 'string');
-      if (hasTurno || hasJugadorId) {
-        const myId = detalle?.jugadorId ?? jugadorId;
+      // Throttle detalle refreshes: avoid calling obtenerPartidaDetalle more than once
+      // every 700ms to prevent flood loops when server re-broadcasts identical PARTIDA_STATE.
+      const now = Date.now();
+      const timeSinceLast = now - (lastDetalleFetchRef.current || 0);
+      const shouldRefreshDetalle = tipo === 'PARTIDA_STATE' || tipo === 'PARTIDA_ESTADO' || tipo === 'RONDA_RESUELTA';
+
+      if (shouldRefreshDetalle && timeSinceLast > 700) {
+        lastDetalleFetchRef.current = now;
+        const myId = detalle?.jugadorId ?? jugadorId ?? readJugadorId(codigo);
         if (myId) {
           try {
             const nuevo = await partidaService.obtenerPartidaDetalle(codigo, myId);
-            if (nuevo) setDetalle(nuevo);
+            if (nuevo) {
+              // Only update detalle if it actually differs to avoid render loops
+              try {
+                const sameMiJugador = detalle && detalle.miJugador && nuevo.miJugador && detalle.miJugador.id === nuevo.miJugador.id && JSON.stringify(detalle.miJugador.cartasEnMano || []) === JSON.stringify(nuevo.miJugador.cartasEnMano || []);
+                if (!detalle || !sameMiJugador) {
+                  setDetalle(nuevo);
+                  try { setMiJugador && setMiJugador(nuevo.miJugador); } catch {}
+                }
+              } catch (e) {
+                setDetalle(nuevo);
+                try { setMiJugador && setMiJugador(nuevo.miJugador); } catch {}
+              }
+            }
           } catch (e) {
-            console.warn('[JuegoPage] failed to refresh detalle after partida message', e);
+            console.warn('[JuegoPage] failed to refresh detalle after PARTIDA_STATE', e);
+          }
+        }
+      } else {
+        // light heuristic: if TURN change or carta jugada, we may update some UI but
+        // avoid fetching detalle too frequently
+        const hasTurno = typeof p.turnoActual === 'string' || (p.partida && typeof p.partida.turnoActual === 'string') || (p.datos && typeof p.datos.turnoActual === 'string');
+        const hasJugadorId = typeof p.jugadorId === 'string' || (p.partida && typeof p.partida.jugadorId === 'string');
+        if ((hasTurno || hasJugadorId) && now - (lastDetalleFetchRef.current || 0) > 1500) {
+          lastDetalleFetchRef.current = now;
+          const myId = detalle?.jugadorId ?? jugadorId ?? readJugadorId(codigo);
+          if (myId) {
+            try {
+              const nuevo = await partidaService.obtenerPartidaDetalle(codigo, myId);
+              if (nuevo) {
+                setDetalle(nuevo);
+                try { setMiJugador && setMiJugador(nuevo.miJugador); } catch {}
+              }
+            } catch (e) {
+              console.warn('[JuegoPage] failed to refresh detalle after partida message', e);
+            }
           }
         }
       }
     } catch (e) {
       console.warn('[JuegoPage] onLobbyPartidaMessage error', e);
     }
-  };
+  }, [codigo, detalle, jugadorId, handlers, setMiJugador]);
 
-  const { jugadores: jugadoresLobby, connected, registerSession, client, turnoActual: turnoLobby } = useLobbyRealTime(codigo, jugadorId, undefined, onLobbyPartidaMessage, handlers.onCountsMessage);
+  // counts handler ref so we can register it with the central WS subscription before the panel handler exists
+  const handleCountsRef = React.useRef<((p: any) => void) | null>(null);
+  const countsCallback = React.useCallback((payload: Record<string, unknown>) => {
+    try { handlers.onCountsMessage?.(payload); } catch {}
+    try { if (handleCountsRef.current) handleCountsRef.current(payload); } catch {}
+  }, [handlers]);
 
-  // Use the low-level client to sync the players panel from PartidaResponse messages
-  const { jugadores: jugadoresPanel, turnoActual: turnoPanel, turnoEsperado } = usePartidaPanelSync(client ?? null, codigo, detalle?.jugadorId ?? jugadorId as string | null);
+  const { jugadores: jugadoresLobby, connected, registerSession, client, turnoActual: turnoLobby } = useLobbyRealTime(codigo, jugadorId, undefined, onLobbyPartidaMessage, countsCallback);
+
+  // Use the low-level client to sync the players panel from PartidaResponse messages (but do not auto-subscribe)
+  const { jugadores: jugadoresPanel, setJugadores: setJugadoresPanel, turnoActual: turnoPanel, turnoEsperado, handlePartidaPayload, handleCountsPayload } = usePartidaPanelSync(client ?? null, codigo, detalle?.jugadorId ?? jugadorId as string | null, { autoSubscribe: false });
+
+  // wire the panel's counts handler into the ref so central countsCallback can forward to it
+  React.useEffect(() => {
+    handleCountsRef.current = handleCountsPayload ?? null;
+    return () => { handleCountsRef.current = null; };
+  }, [handleCountsPayload]);
+
+  // wire partida handler to ref so onLobbyPartidaMessage can call it without dependency cycles
+  React.useEffect(() => {
+    handlePartidaRef.current = handlePartidaPayload ?? null;
+    return () => { handlePartidaRef.current = null; };
+  }, [handlePartidaPayload]);
 
   // Prefer the explicit turnoEsperado (TurnoCambiadoEvent), then panel's turno, then lobby stream, then detalle as last resort
   const partidaTurno = (turnoEsperado ?? turnoPanel ?? turnoLobby ?? detalle?.turnoActual) as string | undefined;
@@ -267,6 +346,13 @@ export default function JuegoPage() {
       if (cartasEnMesaCountFromHandler === 0 && !(atributoSeleccionado ?? detalle?.atributoSeleccionado)) return false;
       return true;
     }
+    // If server didn't provide an expected id, fall back to partidaTurno if available
+    try {
+      if (partidaTurno && String(partidaTurno) === String(canonicalMyId)) {
+        if (cartasEnMesaCountFromHandler === 0 && !(atributoSeleccionado ?? detalle?.atributoSeleccionado)) return false;
+        return true;
+      }
+    } catch {}
     return canDropToMesa;
   })();
 
@@ -340,7 +426,10 @@ export default function JuegoPage() {
               (async () => {
                 try {
                   const nuevo = await partidaService.obtenerPartidaDetalle(codigo, detalle.jugadorId);
-                  if (nuevo) setDetalle(nuevo);
+                  if (nuevo) {
+                    setDetalle(nuevo);
+                    try { setMiJugador && setMiJugador(nuevo.miJugador); } catch {}
+                  }
                 } catch (e) {
                   console.warn('[JuegoPage] failed to refresh detalle after user error', e);
                 }
@@ -366,11 +455,23 @@ export default function JuegoPage() {
   const selectAtributo = async (atributo: 'poder' | 'defensa' | 'ki' | 'velocidad', cartaCodigo?: string) => {
     try {
       // Only allow if current client is the expected player
-  const myId = String((detalle?.jugadorId ?? jugadorId) || '');
-  const expected = effectiveExpectedIdStr ? String(effectiveExpectedIdStr) : '';
-  if (!expected || myId !== expected) {
+      const myId = String((detalle?.jugadorId ?? jugadorId) || '');
+      const serverExpected = effectiveExpectedIdStr ? String(effectiveExpectedIdStr) : '';
+      const clientExpected = expectedPlayerId ? String(expectedPlayerId) : '';
+
+      // Determine if selection is allowed:
+      // - If server published an expected player, require it to match.
+      // - Otherwise fall back to the client-side expectedPlayerId from the hook.
+      const isAllowedByServer = serverExpected && myId === serverExpected;
+      const isAllowedByClient = !serverExpected && clientExpected && myId === clientExpected;
+      if (!isAllowedByServer && !isAllowedByClient) {
         setToastMessage('No puedes seleccionar atributos en este momento');
         return;
+      }
+
+      // If this is the first play and no atributo selected yet, ensure the selector is allowed
+      if (cartasEnMesaCountFromHandler === 0 && !(atributoSeleccionado ?? detalle?.atributoSeleccionado)) {
+        // Only the expected player (handled above) may select; we've already validated that
       }
 
       // Build action payload and send via websocketService
@@ -435,6 +536,18 @@ export default function JuegoPage() {
     };
   }, [codigo]);
 
+  // Initialize jugadorId from persisted storage if present
+  useEffect(() => {
+    try {
+  const persisted = readJugadorId(codigo);
+      if (persisted && !jugadorId) {
+        setJugadorId(persisted);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, []);
+
   // cleanup pointer tracker if component unmounts
   useEffect(() => {
     // capture the current ref snapshot to avoid stale-ref warnings in the cleanup
@@ -460,27 +573,9 @@ export default function JuegoPage() {
     };
   }, []);
 
-  // Keep detalle.miJugador.numeroCartas in sync with miJugadorFromHook when counts arrive via WS
-  useEffect(() => {
-    try {
-      if (
-        miJugadorFromHook &&
-        miJugadorFromHook.id &&
-        detalle &&
-        detalle.miJugador &&
-        detalle.miJugador.id === miJugadorFromHook.id
-      ) {
-        setDetalle((prev) =>
-          prev
-            ? { ...prev, miJugador: { ...prev.miJugador, numeroCartas: miJugadorFromHook.numeroCartas ?? prev.miJugador.numeroCartas } }
-            : prev
-        );
-      }
-    } catch {
-      // ignore
-    }
-    // only run when miJugadorFromHook.numeroCartas changes — include detalle and miJugadorFromHook to satisfy lint (effect is guarded)
-    }, [miJugadorFromHook?.numeroCartas, detalle, miJugadorFromHook]);
+  // NOTE: The sync between counts (miJugadorFromHook) and detalle.miJugador is handled
+  // via the websocket handlers and explicit detalle fetches. Removing the inline effect
+  // avoids dependency-size/runtime errors and update loops in dev mode.
 
   useEffect(() => {
     // Intentar recuperar jugadorId de localStorage o reconectar antes de solicitar detalle privado
@@ -520,12 +615,16 @@ export default function JuegoPage() {
           try { persistJugadorId(codigo, detalleResp.jugadorId); } catch { }
         }
 
-  const cartas = await fetch('/api/cartas');
-  const cartasJsonRaw: unknown = cartas.ok ? await cartas.json() : [];
   let db: Record<string, Carta> = {};
-  if (Array.isArray(cartasJsonRaw)) {
-    const cartasJson = cartasJsonRaw as Carta[];
-    db = cartasJson.reduce((acc: Record<string, Carta>, c) => { acc[c.codigo] = c; return acc; }, {});
+  try {
+    const res = await api.get('/api/cartas');
+    const cartasJsonRaw = res && res.data ? res.data : [];
+    if (Array.isArray(cartasJsonRaw)) {
+      const cartasJson = cartasJsonRaw as Carta[];
+      db = cartasJson.reduce((acc: Record<string, Carta>, c) => { acc[c.codigo] = c; return acc; }, {});
+    }
+  } catch (e) {
+    console.warn('[JuegoPage] failed to fetch cartas via api', e);
   }
   // merge with globalCartasDB provided by useGameData (if any)
   const merged = { ...db, ...(globalCartasDB || {}) } as Record<string, Carta>;
@@ -611,6 +710,33 @@ export default function JuegoPage() {
     };
   }, [codigo]);
 
+  // Propagar cambios en miJugador.numeroCartas al panel de jugadores para mantener conteos en tiempo real
+  useEffect(() => {
+    try {
+      if (!setJugadoresPanel || !miJugadorFromHook) return;
+      // Update only if jugadoresPanel has an entry for miJugador
+      setJugadoresPanel((prev) => {
+        if (!prev || prev.length === 0) return prev;
+  const map = prev.map((p) => ({ ...p }));
+        let changed = false;
+        for (const p of map) {
+          try {
+            if (String(p.id) === String(miJugadorFromHook.id)) {
+              const newCount = typeof miJugadorFromHook.numeroCartas === 'number' ? miJugadorFromHook.numeroCartas : p.numeroCartas;
+              if (p.numeroCartas !== newCount) {
+                p.numeroCartas = newCount;
+                changed = true;
+              }
+            }
+          } catch {}
+        }
+        return changed ? (map as any) : prev;
+      });
+    } catch (e) {
+      // ignore
+    }
+  }, [miJugadorFromHook, setJugadoresPanel]);
+
   // Si no hay detalle, mostrar loading
   if (!detalle) {
     return (
@@ -632,7 +758,9 @@ export default function JuegoPage() {
                 <div className="p-2 bg-black/60 border border-yellow-500 text-sm text-yellow-200 rounded">
                   <div><strong>DEBUG</strong></div>
                   <div>canonicalMyId: {canonicalMyId}</div>
-                  <div>effectiveExpectedId: {effectiveExpectedIdStr}</div>
+                    <div>effectiveExpectedId: {effectiveExpectedIdStr}</div>
+                    <div>effectiveCanDropToMesaFinal: {String(effectiveCanDropToMesaFinal)}</div>
+                    <div>resolvedExpectedId: {String(resolvedExpectedId)}</div>
                   <div>partidaTurno: {String(partidaTurno)}</div>
                   <div>turnoEsperado (raw): {String(turnoEsperado ?? '')}</div>
                   <div>jugadoresPanel: {JSON.stringify((jugadoresPanel || []).map(j => ({ id: j.id, userId: (j as any).userId, nombre: j.nombre, numeroCartas: j.numeroCartas })))}</div>
@@ -640,7 +768,12 @@ export default function JuegoPage() {
               </div>
             ) : null}
             <aside className="lg:col-span-1">
-              <PlayersList key={effectiveExpectedIdStr || 'players'} jugadores={(jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby) as unknown as JugadorPublic[]} partidaTurno={partidaTurno} />
+              {(() => {
+                const base = (jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby) as unknown as any[];
+                const myIdLocal = detalle?.jugadorId ?? jugadorId ?? null;
+                const playersForUI = base.map((p) => ({ ...p, isMe: p.isMe ?? (myIdLocal ? String(p.id) === String(myIdLocal) : false) }));
+                return <PlayersList key={effectiveExpectedIdStr || 'players'} jugadores={playersForUI as JugadorPublic[]} partidaTurno={partidaTurno} />;
+              })()}
             </aside>
 
             <main className="lg:col-span-3 space-y-6">
@@ -994,7 +1127,7 @@ export default function JuegoPage() {
               >
                 <div className="bg-black/80 p-6 rounded-lg border border-orange-500/30">
                   <h2 className="text-xl font-bold text-orange-500">Mesa</h2>
-                  <Mesa className="mt-4" />
+                  <Mesa className="mt-4" jugadores={(jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby)} selectedAtributo={atributoSeleccionado ?? detalle?.atributoSeleccionado ?? null} selectedCartaCodigo={selectedCartaLocal ?? null} />
                 </div>
 
                 <div className="bg-black/80 p-4 rounded-lg border border-orange-500/30">
@@ -1003,11 +1136,28 @@ export default function JuegoPage() {
                     <ManoJugador
                       cartasCodigos={manoOrder.length ? manoOrder : detalle.miJugador.cartasEnMano}
                       cartasDB={cartasDB}
+                      numeroCartas={typeof detalle.miJugador.numeroCartas === 'number' ? detalle.miJugador.numeroCartas : miJugadorFromHook?.numeroCartas}
                       externalDnd
                       controlledOrder={manoOrder.length ? manoOrder : detalle.miJugador.cartasEnMano}
                       onOrderChange={(newOrder) => { setManoOrder(newOrder); }}
                       onSelectAtributo={selectAtributo}
-                      canSelectAtributo={Boolean(effectiveCanDropToMesaFinal && String(resolvedExpectedId) === String(canonicalMyId))}
+                      canSelectAtributo={(() => {
+                        try {
+                          const my = String(canonicalMyId);
+                          if (!my) return false;
+                          // If server provided expected, prefer it (compare both raw and resolved id)
+                          if (effectiveExpectedIdStr) {
+                            if (String(effectiveExpectedIdStr) === my) return true;
+                            if (String(resolvedExpectedId) === my) return true;
+                            return false;
+                          }
+                          // fall back to client-calculated expectedPlayerId
+                          if (expectedPlayerId && String(expectedPlayerId) === my) return true;
+                          return false;
+                        } catch {
+                          return false;
+                        }
+                      })()}
                       selectedAtributo={selectedAtributoLocal}
                       selectedCartaCodigo={selectedCartaLocal}
                     />

@@ -9,7 +9,7 @@ type JugadorPanel = {
   conectado: boolean;
 };
 
-export function usePartidaPanelSync(client: Client | null, partidaCodigo: string | null, myJugadorId?: string | null) {
+export function usePartidaPanelSync(client: Client | null, partidaCodigo: string | null, myJugadorId?: string | null, options?: { autoSubscribe?: boolean }) {
   const [jugadores, setJugadores] = useState<JugadorPanel[]>([]);
   const [turnoActual, setTurnoActual] = useState<string | null>(null);
   const [turnoEsperado, setTurnoEsperado] = useState<string | null>(null);
@@ -104,7 +104,12 @@ export function usePartidaPanelSync(client: Client | null, partidaCodigo: string
     }
   }, []);
 
+  // If autoSubscribe is enabled (default), the hook will create its own subscriptions
+  // to the STOMP client. If a central subscriber is preferred, pass { autoSubscribe: false }
+  // and instead use the handler functions returned by this hook (handlePartidaPayload, handleCountsPayload).
   useEffect(() => {
+    const auto = options?.autoSubscribe ?? true;
+    if (!auto) return;
     if (!client || !partidaCodigo) return;
     let subPartida: any = null;
     let subCounts: any = null;
@@ -123,9 +128,29 @@ export function usePartidaPanelSync(client: Client | null, partidaCodigo: string
       try { subPartida && subPartida.unsubscribe(); } catch {}
       try { subCounts && subCounts.unsubscribe(); } catch {}
     };
-  }, [client, partidaCodigo, handlePartidaMessage, handleCounts]);
+  }, [client, partidaCodigo, handlePartidaMessage, handleCounts, options]);
 
-  return { jugadores, setJugadores, turnoActual, setTurnoActual, turnoEsperado, setTurnoEsperado };
+  // Handlers exposed so a central subscriber can call them with a parsed payload
+  const handlePartidaPayload = (payload: any) => {
+    try {
+      // Reuse parsing logic by constructing a faux IMessage-like object with a body
+      const msg = { body: JSON.stringify(payload) } as unknown as IMessage;
+      handlePartidaMessage(msg);
+    } catch (e) {
+      console.warn('[usePartidaPanelSync] handlePartidaPayload error', e);
+    }
+  };
+
+  const handleCountsPayload = (payload: any) => {
+    try {
+      const msg = { body: JSON.stringify(payload) } as unknown as IMessage;
+      handleCounts(msg);
+    } catch (e) {
+      console.warn('[usePartidaPanelSync] handleCountsPayload error', e);
+    }
+  };
+
+  return { jugadores, setJugadores, turnoActual, setTurnoActual, turnoEsperado, setTurnoEsperado, handlePartidaPayload, handleCountsPayload };
 }
 
 export default usePartidaPanelSync;

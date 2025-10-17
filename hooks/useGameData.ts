@@ -1,20 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Carta, JugadorPrivate } from '@/types/api';
 import { websocketService } from '@/lib/websocket';
+import api from '@/lib/api';
 
 export function useGameData() {
   const [cartasDB, setCartasDB] = useState<Record<string, Carta>>({});
   const [atributoSeleccionado, setAtributoSeleccionado] = useState<string | null>(null);
   const [miJugador, setMiJugador] = useState<JugadorPrivate | null>(null);
-  const [cartasEnMesa, setCartasEnMesa] = useState<Array<{ jugadorId: string; codigoCarta: string; nombreCarta?: string }>>([]);
+  const [cartasEnMesa, setCartasEnMesa] = useState<Array<{ jugadorId: string; codigoCarta: string; nombreCarta?: string; atributoSeleccionado?: string; valorAtributo?: number; jugadorNombre?: string }>>([]);
   const [resolviendo, setResolviendo] = useState(false);
   const [rondaResultado, setRondaResultado] = useState<any | null>(null);
 
   const loadCartasDB = useCallback(async () => {
     try {
-      const res = await fetch('/api/cartas');
-      if (!res.ok) return;
-      const data = await res.json();
+      const res = await api.get('/api/cartas');
+      const data = res && res.data ? res.data : [];
       if (Array.isArray(data)) {
         const map = (data as Carta[]).reduce((a: Record<string, Carta>, c) => { a[c.codigo] = c; return a; }, {});
         setCartasDB(map);
@@ -31,27 +31,73 @@ export function useGameData() {
   }, [loadCartasDB]);
 
   const onPartidaIniciada = useCallback(async (event: unknown) => {
-    // Ensure cartas DB is loaded when a partida is initiated. loadCartasDB is idempotent
-    // for our purposes in dev; if already loaded it will simply refetch.
-    await loadCartasDB();
-    // if event contiene miJugadorId, podríamos pedir detalle privado fuera
+    // Intentionally left light: do not re-fetch cartasDB on every PARTIDA_STATE to
+    // avoid repeated network calls and render loops. Consumers may call loadCartasDB()
+    // once on mount if needed.
   }, [loadCartasDB]);
 
   const onAtributoSeleccionado = useCallback((event: unknown) => {
     if (event && typeof event === 'object') {
-      const e = event as Record<string, unknown>;
-      if ('atributo' in e) setAtributoSeleccionado(e.atributo as string);
+      const e = event as Record<string, any>;
+      if ('atributo' in e) {
+        const atributo = e.atributo as string;
+        setAtributoSeleccionado(atributo);
+
+        try {
+          // If a carta already exists on mesa for this jugador or cartaCodigo, attach the atributo to it
+          setCartasEnMesa((prev) => {
+            if (!prev || prev.length === 0) return prev;
+            const jugadorId = e.jugadorId ? String(e.jugadorId) : undefined;
+            const cartaCodigo = e.cartaCodigo ? String(e.cartaCodigo) : (e.datos && e.datos.codigo ? String(e.datos.codigo) : undefined);
+            return prev.map((c) => {
+              try {
+                if ((jugadorId && String(c.jugadorId) === String(jugadorId)) || (c.codigoCarta && cartaCodigo && String(c.codigoCarta) === String(cartaCodigo))) {
+                  const jugadorNombre = e.nombreJugador ?? e.jugadorNombre ?? e.datos?.jugadorNombre ?? undefined;
+                  return { ...c, atributoSeleccionado: atributo, valorAtributo: e.valor ?? e.valorAtributo ?? undefined, jugadorNombre };
+                }
+              } catch {}
+              return c;
+            });
+          });
+        } catch (err) {
+          console.warn('[useGameData] onAtributoSeleccionado update cartasEnMesa failed', err);
+        }
+      }
     }
   }, []);
 
   const onCartaJugada = useCallback((event: unknown) => {
     if (!event || typeof event !== 'object') return;
     const e = event as Record<string, any>;
-    setCartasEnMesa((prev) => [...prev, {
+    // If there's an atributoSeleccionado currently active, attach it to the carta en mesa
+    const currentAtributo = atributoSeleccionado;
+    const codigo = String(e.codigoCarta ?? e.datos?.codigo ?? '');
+    const entry: any = {
       jugadorId: String(e.jugadorId),
-      codigoCarta: String(e.codigoCarta ?? e.datos?.codigo ?? ''),
+      codigoCarta: codigo,
       nombreCarta: e.nombreCarta ?? e.datos?.nombre,
-    }]);
+    };
+    if (currentAtributo) {
+      entry.atributoSeleccionado = currentAtributo;
+      entry.valorAtributo = e.valor ?? e.valorAtributo ?? undefined;
+    } else if (e.atributo) {
+      entry.atributoSeleccionado = e.atributo;
+      entry.valorAtributo = e.valor ?? e.valorAtributo ?? undefined;
+    }
+
+    // also try to include jugadorNombre if provided by the event
+    if (e.jugadorNombre || e.nombreJugador || e.datos?.jugadorNombre) entry.jugadorNombre = e.jugadorNombre ?? e.nombreJugador ?? e.datos?.jugadorNombre;
+
+    setCartasEnMesa((prev) => [...prev, entry]);
+
+    // Immediate local update: if the carta fue jugada por miJugador, decrementar su numeroCartas
+    try {
+      if (miJugador && miJugador.id && String(miJugador.id) === String(e.jugadorId)) {
+        setMiJugador((prev) => prev ? ({ ...prev, numeroCartas: Math.max(0, (prev.numeroCartas ?? 0) - 1) }) : prev);
+      }
+    } catch (err) {
+      // ignore
+    }
   }, []);
 
   const onTransformacion = useCallback((event: unknown) => {
@@ -66,12 +112,91 @@ export function useGameData() {
     // Mark that a ronda is being resolved and store its payload so the UI (Mesa)
     // can perform the collect animation before we clear the mesa and refresh.
     try {
-      setRondaResultado(event ?? null);
+      const evt = event ?? null;
+      setRondaResultado(evt);
       setResolviendo(true);
+      try {
+        // Ask server for canonical state so counts and mesa get refreshed for all clients
+        const codigo = (typeof window !== 'undefined' && (window as any).__CURRENT_PARTIDA_CODIGO) ? String((window as any).__CURRENT_PARTIDA_CODIGO) : undefined;
+        if (codigo) websocketService.solicitarEstadoMultiple(codigo);
+
+        // If the event contains immediate counts or a winner, update local miJugador immediately
+        try {
+          const payload = evt as any;
+          const ganadorId = payload?.ganadorId ?? payload?.datos?.ganadorId ?? payload?.winnerId ?? null;
+          // counts may come as payload.counts = [{ jugadorId, numeroCartas, nombre }]
+          const counts = payload?.counts ?? payload?.jugadores ?? null;
+
+          if (Array.isArray(counts)) {
+            // If counts include this client, update miJugador.numeroCartas
+            try {
+              if (miJugador && miJugador.id) {
+                const found = counts.find((c: any) => String(c.jugadorId) === String(miJugador.id));
+                if (found && typeof found.numeroCartas === 'number') {
+                  setMiJugador((prev) => prev ? ({ ...prev, numeroCartas: found.numeroCartas }) : prev);
+                }
+              }
+            } catch {}
+          }
+
+          // If I'm the winner, try to fetch detalle to update my mano (cards added to winner)
+          if (ganadorId && miJugador && String(ganadorId) === String(miJugador.id) && codigo) {
+            try {
+              // fetch updated detalle (winner gets added cards) via axios api instance
+              const detalleRes = await api.get(`/api/partidas/${codigo}/detalle`, { params: { jugadorId: miJugador.id } });
+              const detalle = detalleRes && detalleRes.data ? detalleRes.data : null;
+              if (detalle && detalle.miJugador) setMiJugador(detalle.miJugador);
+            } catch (err) {
+              // ignore fetch errors
+            }
+          }
+        } catch (err) {
+          // ignore per-event processing errors
+        }
+      } catch {}
     } catch (e) {
       console.warn('[useGameData] onRondaResuelta error', e);
     }
   }, [miJugador]);
+
+  // Fallback: if after a short delay the animation path hasn't cleared the mesa,
+  // perform a forced resolution to keep all clients synced (useful for headless
+  // clients or clients that missed the animation lifecycle).
+  useEffect(() => {
+    let timer: number | undefined = undefined;
+    try {
+      if (!rondaResultado) return;
+
+      timer = window.setTimeout(async () => {
+        try {
+          // If still resolving, attempt to refresh detalle and clear local mesa
+          if (rondaResultado) {
+            const codigo = (typeof window !== 'undefined' && (window as any).__CURRENT_PARTIDA_CODIGO) ? String((window as any).__CURRENT_PARTIDA_CODIGO) : undefined;
+            // fetch detalle to update miJugador counts
+            if (codigo && miJugador?.id) {
+              try {
+                const detalleRes = await api.get(`/api/partidas/${codigo}/detalle`, { params: { jugadorId: miJugador.id } });
+                const detalle = detalleRes && detalleRes.data ? detalleRes.data : null;
+                if (detalle && detalle.miJugador) setMiJugador(detalle.miJugador);
+              } catch (err) {
+                // ignore fetch errors
+              }
+            }
+
+            // Clear mesa state so the UI doesn't keep old cards
+            setCartasEnMesa([]);
+            setAtributoSeleccionado(null);
+            setResolviendo(false);
+            setRondaResultado(null);
+          }
+        } catch (err) {
+          // ignore
+        }
+      }, 1400);
+    } catch {}
+
+    return () => { try { if (timer) clearTimeout(timer); } catch {} };
+  }, [rondaResultado, miJugador]);
 
   // Called by the UI after animations complete to finalize the resolution:
   // - refresh detalle (miJugador) from server
@@ -97,9 +222,9 @@ export function useGameData() {
         return;
       }
 
-      const detalleRes = await fetch(`/api/partidas/${codigo}/detalle?jugadorId=${miJugador.id}`);
-      if (detalleRes.ok) {
-        const detalle = await detalleRes.json();
+      const detalleRes = await api.get(`/api/partidas/${codigo}/detalle`, { params: { jugadorId: miJugador.id } });
+      const detalle = detalleRes && detalleRes.data ? detalleRes.data : null;
+      if (detalle && detalle.miJugador) {
         setMiJugador(detalle.miJugador);
       }
       setCartasEnMesa([]);
@@ -144,41 +269,10 @@ export function useGameData() {
     }
   }, [miJugador]);
 
-  // Subscribe to WebSocket partida topics when a partida codigo is set in the app logic.
-  // The consumer should ensure this hook is mounted for the current partida page.
-  useEffect(() => {
-    // This hook doesn't know the current codigo; consumers can subscribe manually via websocketService
-    // But to help integration, if an external script sets window.__CURRENT_PARTIDA_CODIGO we can auto-subscribe (optional)
-    try {
-      const maybeCodigo = (typeof window !== 'undefined' && (window as any).__CURRENT_PARTIDA_CODIGO) ? String((window as any).__CURRENT_PARTIDA_CODIGO) : undefined;
-      if (!maybeCodigo) return;
-
-      let mounted = true;
-      (async () => {
-        try {
-          await websocketService.subscribeToPartidaWithHandlers(maybeCodigo, {
-            onPartidaIniciada: (ev) => { if (!mounted) return; onPartidaIniciada(ev); },
-            onAtributoSeleccionado: (ev) => { if (!mounted) return; onAtributoSeleccionado(ev); },
-            onCartaJugada: (ev) => { if (!mounted) return; onCartaJugada(ev); },
-            onRondaResuelta: (ev) => { if (!mounted) return; onRondaResuelta(ev); },
-            onCounts: (p) => { if (!mounted) return; onCountsMessage(p); },
-            onGeneric: (ev) => { /* no-op for now */ },
-          });
-        } catch (e) {
-          console.warn('[useGameData] subscribeToPartidaWithHandlers failed', e);
-        }
-      })();
-
-      return () => {
-        mounted = false;
-        try {
-          if (maybeCodigo) websocketService.unsubscribeFromPartida(maybeCodigo);
-        } catch {}
-      };
-    } catch (e) {
-      // ignore
-    }
-  }, [onPartidaIniciada, onAtributoSeleccionado, onCartaJugada, onRondaResuelta, onCountsMessage]);
+  // NOTE: Removed auto-subscription to WebSocket topics to avoid duplicate
+  // subscriptions when consumers (e.g., JuegoPage) already subscribe centrally.
+  // Consumers should use `websocketService` or `useLobbyRealTime` to subscribe and
+  // pass event payloads into the handlers exported above.
 
   return {
     cartasDB,

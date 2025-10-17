@@ -10,9 +10,12 @@ import { useEffect } from 'react';
 
 type Props = {
   className?: string;
+  jugadores?: Array<any>;
+  selectedAtributo?: string | null;
+  selectedCartaCodigo?: string | null;
 };
 
-export default function Mesa({ className = '' }: Props) {
+export default function Mesa({ className = '', jugadores = [], selectedAtributo = null, selectedCartaCodigo = null }: Props) {
   const { setNodeRef, isOver } = useDroppable({ id: 'mesa' });
   // Intentar cargar imagen desde public; si no existe, usar un fallback de color
   const bgStyle: React.CSSProperties = { backgroundImage: "url('/mesa.webp')" };
@@ -86,9 +89,33 @@ export default function Mesa({ className = '' }: Props) {
       atributos: {},
     } as Carta;
 
+    // try to resolve jugador name from provided players prop (if any)
+    let jugadorNombre: string | undefined = undefined;
+    try {
+      if (Array.isArray(jugadores) && jugadores.length > 0) {
+        const found = jugadores.find((p: any) => String(p.id) === String(carta.jugadorId) || String((p as any).userId ?? '') === String(carta.jugadorId));
+        if (found) jugadorNombre = found.nombre || found.name || found.username;
+      }
+    } catch { /* ignore */ }
+
+    // fallback: maybe the carta object already contains jugadorNombre
+    const badgeName = jugadorNombre ?? (carta.jugadorNombre ?? carta.jugadorName ?? carta.jugadorId);
+
     return (
       <div data-mesa-card-index={idx} className="absolute" style={{ left: `${10 + idx * 14}%`, top: `${20 + (idx % 2) * 6}%`, width: '120px' }}>
-          <CartaComponent carta={fullCarta} mostrarAtributos={true} nameVariant="mesa" />
+          {/* player name badge (will be filled by parent via data attributes if available) */}
+          <div className="absolute -top-4 left-0 right-0 flex justify-center pointer-events-none z-40">
+            <div className="bg-black/60 text-white text-[11px] font-medium px-2 py-0.5 rounded">{String(badgeName ?? '')}</div>
+          </div>
+          <div className="relative">
+            <CartaComponent carta={fullCarta} mostrarAtributos={true} nameVariant="mesa" selectedAtributo={selectedAtributo} selectedCartaCodigo={selectedCartaCodigo} />
+            {/* If this carta on mesa has atributoSeleccionado or valorAtributo, show a visible badge for all players */}
+            {(carta.atributoSeleccionado || carta.valorAtributo) && (
+              <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 bg-white/95 text-black text-[11px] font-semibold px-2 py-0.5 rounded-full shadow-lg z-50 pointer-events-none">
+                {carta.atributoSeleccionado ? `${String(carta.atributoSeleccionado).toUpperCase()} ${carta.valorAtributo ? `: ${carta.valorAtributo}` : ''}` : `${carta.valorAtributo ?? ''}`}
+              </div>
+            )}
+          </div>
         </div>
     );
   };

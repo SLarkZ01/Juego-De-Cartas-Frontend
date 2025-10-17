@@ -101,6 +101,17 @@ export function useLobbyRealTime(
                 return;
               }
 
+              // El servidor puede enviar varios shapes. Primero procesamos TURN_CHANGES explícitos
+              // El backend emite eventos TURNO_CAMBIADO con { expectedPlayerId, expectedPlayerNombre }
+              if (payload['tipo'] === 'TURNO_CAMBIADO' && typeof payload['expectedPlayerId'] === 'string') {
+                const expected = String(payload['expectedPlayerId']);
+                console.log('[useLobbyRealTime] Evento TURNO_CAMBIADO recibido. expectedPlayerId=', expected);
+                // Actualizamos turnoActual inmediatamente con el id señalado por el servidor.
+                setTurnoActual(expected);
+                setLoading(false);
+                // fallthrough: también avisamos al callback onPartidaMessage arriba
+              }
+
               // El servidor envía un PartidaResponse con { codigo, jugadorId, jugadores }
               const maybeJugadores = payload['jugadores'];
               if (Array.isArray(maybeJugadores)) {
