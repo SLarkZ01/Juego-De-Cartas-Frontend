@@ -8,6 +8,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { usePartida } from '@/hooks/usePartida';
 import { Button } from '@/components/ui/button';
 import Image from 'next/image';
+import LobbyBackground from '@/components/lobby/LobbyBackground';
 
 export default function JugarPage() {
   const router = useRouter();
@@ -95,14 +96,11 @@ export default function JugarPage() {
 
   return (
     <div className="relative min-h-screen flex items-center justify-center">
-      {/* Background image */}
-      <Image
-        src="/images/fondo.webp"
-        alt="Fondo del juego"
-        fill
-        className="object-cover object-center -z-10"
-        priority
-      />
+      {/* Background GIF (LobbyBackground) */}
+      <LobbyBackground gifs={[
+        '/1.gif', '/2.gif', '/3.gif', '/4.gif', '/5.gif', '/6.gif', '/7.gif', '/8.gif',
+        '/images/fondo.webp'
+      ]} intervalMs={8000} />
 
       {/* Dark overlay */}
       <div className="absolute inset-0 bg-black/60 -z-5" />

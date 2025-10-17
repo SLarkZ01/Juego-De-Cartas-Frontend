@@ -19,7 +19,7 @@ export default function LobbyBackground({ gifs = [], intervalMs = 8000, classNam
   }, [list.length, intervalMs]);
 
   return (
-    <div className={`absolute inset-0 -z-10 overflow-hidden ${className}`} aria-hidden>
+    <div className={`absolute inset-0 z-0 overflow-hidden ${className}`} aria-hidden>
       {list.map((src, i) => (
         <img
           key={src + i}
@@ -29,7 +29,7 @@ export default function LobbyBackground({ gifs = [], intervalMs = 8000, classNam
           style={{ willChange: 'opacity, transform' }}
         />
       ))}
-      <div className="absolute inset-0 bg-black/40" />
+      <div className="absolute inset-0 bg-black/40 z-0" />
     </div>
   );
 }

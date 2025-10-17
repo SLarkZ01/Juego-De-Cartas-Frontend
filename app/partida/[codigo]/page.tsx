@@ -204,7 +204,7 @@ export default function PartidaPage() {
   return (
     <div className="relative min-h-screen bg-black">
         <LobbyBackground gifs={[
-          'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExZ3BidjhqYmlzbnd3MHhwYzJpM2RjeWEydGljMXFjNnZhbWlnd3BubCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/17ytUBJ7boX5FHXmhg/giphy.gif',
+          '/1.gif', '/2.gif', '/3.gif', '/4.gif', '/5.gif', '/6.gif', '/7.gif', '/8.gif',
           '/images/fondo.webp'
         ]} intervalMs={8000} />
 

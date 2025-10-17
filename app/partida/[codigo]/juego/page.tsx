@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import type { DragMoveEvent } from '@dnd-kit/core';
 import { useParams, useRouter } from 'next/navigation';
 import LobbyHeader from '@/components/lobby/LobbyHeader';
+import LobbyBackground from '@/components/lobby/LobbyBackground';
 import PlayersList from '@/components/lobby/PlayersList';
 import ManoJugador from '@/components/game/ManoJugador';
 import { useReorderHand } from '@/hooks/useReorderHand';
@@ -900,8 +901,11 @@ export default function JuegoPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[url('/images/fondo.webp')] bg-cover bg-center">
-      <div className="backdrop-blur-sm bg-black/50 min-h-screen">
+    <div className="relative min-h-screen">
+      <LobbyBackground gifs={[
+        '/1.gif','/2.gif','/3.gif','/4.gif','/5.gif','/6.gif','/7.gif','/8.gif','/images/fondo.webp'
+      ]} intervalMs={8000} />
+      <div className="relative z-10 backdrop-blur-sm bg-black/50 min-h-screen">
         <div className="max-w-7xl mx-auto p-4">
           <LobbyHeader codigo={codigo} estado={detalle.estado || 'EN_CURSO'} visualConectado={connected} onSalir={() => router.push('/jugar')} />
 
