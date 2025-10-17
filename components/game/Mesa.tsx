@@ -14,9 +14,10 @@ type Props = {
   selectedAtributo?: string | null;
   selectedCartaCodigo?: string | null;
   extraCartas?: any[];
+  selections?: Array<{ jugadorId: string; cartaCodigo?: string; atributo?: string; nombreJugador?: string; timestamp?: string }>;
 };
 
-export default function Mesa({ className = '', jugadores = [], selectedAtributo = null, selectedCartaCodigo = null, extraCartas = [] }: Props) {
+export default function Mesa({ className = '', jugadores = [], selectedAtributo = null, selectedCartaCodigo = null, extraCartas = [], selections = [] }: Props) {
   const { setNodeRef, isOver } = useDroppable({ id: 'mesa' });
   // Intentar cargar imagen desde public; si no existe, usar un fallback de color
   const bgStyle: React.CSSProperties = { backgroundImage: "url('/mesa.webp')" };
@@ -196,6 +197,98 @@ export default function Mesa({ className = '', jugadores = [], selectedAtributo 
             (extraCartas || []).forEach((c: any) => pushIfNew(c));
             return combined.map((c, idx) => <CartaMesa key={`${String(c.jugadorId)}_${idx}`} carta={c} idx={idx} />);
           })()}
+          {/* Selection notifications: render a colored notification per selection. If the card is already on mesa, position near it; otherwise show floating notifications in the top-left stack. */}
+          {/* Helper: map atributo name to visual style */}
+          {(() => {
+            const mapAtributo = (a?: string) => {
+              const key = String(a ?? '').toLowerCase();
+              switch (key) {
+                case 'poder':
+                  return { color: 'bg-red-600', label: 'PODER', accent: '#dc2626' };
+                case 'defensa':
+                  return { color: 'bg-blue-600', label: 'DEFENSA', accent: '#2563eb' };
+                case 'ki':
+                  return { color: 'bg-emerald-600', label: 'KI', accent: '#059669' };
+                case 'amarillo':
+                case 'velocidad':
+                  return { color: 'bg-yellow-400', label: 'VELOCIDAD', accent: '#f59e0b', text: 'text-white' };
+                default:
+                  return { color: 'bg-gray-700', label: String(a ?? '').toUpperCase(), accent: '#374151' };
+              }
+            };
+
+            // Build combined list to search for cards on mesa
+            const combined = [] as any[];
+            const seen = new Set<string>();
+            const pushIfNew = (c: any) => {
+              const id = `${String(c.jugadorId ?? '')}_${String(c.codigoCarta ?? c.codigo ?? c.datos?.codigo ?? '')}`;
+              if (!seen.has(id)) { seen.add(id); combined.push(c); }
+            };
+            (cartasEnMesa || []).forEach(pushIfNew);
+            (extraCartas || []).forEach(pushIfNew);
+
+            // Floating pending stack (for selections without a mesa card yet)
+            const pending: React.ReactNode[] = [];
+
+            return Array.isArray(selections) && selections.map((s, sidx) => {
+              try {
+                const targetCode = String(s.cartaCodigo ?? '');
+                const idx = combined.findIndex(c => String(c.codigoCarta ?? c.codigo ?? c.datos?.codigo ?? '') === targetCode && String(c.jugadorId ?? '') === String(s.jugadorId ?? ''));
+                const info = mapAtributo(s.atributo);
+
+                const content = (
+                  <div className={`flex items-center gap-2 ${info.text ?? 'text-white'}`}>
+                    <span className={`w-2 h-2 rounded-full ${info.color} shadow-md`} style={{ boxShadow: `0 2px 8px ${info.accent}33` }} />
+                    <div className="flex flex-col leading-tight">
+                      <div className="text-[12px] font-semibold">{String(s.nombreJugador ?? s.jugadorId)}</div>
+                      <div className="text-[11px] opacity-90 uppercase">{info.label}</div>
+                    </div>
+                  </div>
+                );
+
+                if (idx !== -1) {
+                  // position badge near that card's placement coords
+                  const left = `${10 + idx * 14}%`;
+                  const top = `${12 + (idx % 2) * 6}%`; // slightly higher than previous
+                  return (
+                    <div key={`sel_${sidx}`} style={{ left, top }} className="absolute z-50 pointer-events-none">
+                      <div className="rounded-md shadow-lg px-3 py-1 bg-black/60 backdrop-blur-sm" style={{ animation: 'notifIn 360ms cubic-bezier(.2,.9,.2,1)' }}>
+                        {content}
+                      </div>
+                    </div>
+                  );
+                }
+
+                // pending (not on mesa yet) -> add to pending stack
+                pending.push(
+                  <div key={`sel_pending_${sidx}`} className="w-56 rounded-md shadow-lg px-3 py-2 bg-black/70 backdrop-blur-sm" style={{ animation: `notifIn 360ms cubic-bezier(.2,.9,.2,1)`, marginBottom: '8px' }}>
+                    {content}
+                  </div>
+                );
+                // return null for now because pending will be rendered in stack below
+                return null;
+              } catch (e) {
+                return null;
+              }
+            }).concat(
+              // render pending stack in top-left, newest on top
+              pending.length > 0 ? [
+                <div key="sel_pending_stack" className="absolute top-3 left-3 z-50 pointer-events-none flex flex-col-reverse items-start">
+                  {pending}
+                </div>
+              ] : []
+            );
+          })()}
+
+          {/* Small keyframes for notification entrance (fade + slide) */}
+          <style jsx>{`
+            @keyframes notifIn {
+              0% { transform: translateY(-6px) scale(.98); opacity: 0; }
+              60% { transform: translateY(2px) scale(1.02); opacity: 1; }
+              100% { transform: translateY(0) scale(1); opacity: 1; }
+            }
+            .notif-enter { animation: notifIn 360ms cubic-bezier(.2,.9,.2,1); }
+          `}</style>
         </div>
       </div>
     </div>

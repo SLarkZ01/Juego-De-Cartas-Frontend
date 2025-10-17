@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useLobbyRealTime } from '@/hooks/useLobbyRealTime';
 import { Button } from '@/components/ui/button';
 import Image from 'next/image';
+import LobbyBackground from '@/components/lobby/LobbyBackground';
 import LobbyHeader from '@/components/lobby/LobbyHeader';
 import PlayersList from '@/components/lobby/PlayersList';
 import LobbyInfo from '@/components/lobby/LobbyInfo';
@@ -202,7 +203,10 @@ export default function PartidaPage() {
 
   return (
     <div className="relative min-h-screen bg-black">
-      <Image src="/images/fondo.webp" alt="Fondo" fill className="object-cover opacity-30" priority />
+        <LobbyBackground gifs={[
+          'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExZ3BidjhqYmlzbnd3MHhwYzJpM2RjeWEydGljMXFjNnZhbWlnd3BubCZlcD12MV9naWZzX3NlYXJjaCZjdD1n/17ytUBJ7boX5FHXmhg/giphy.gif',
+          '/images/fondo.webp'
+        ]} intervalMs={8000} />
 
       <div className="relative z-10 min-h-screen p-4">
         <LobbyHeader codigo={codigo} estado={'ESPERANDO'} visualConectado={visualConectado} onSalir={handleSalir} />

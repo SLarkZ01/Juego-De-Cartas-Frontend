@@ -38,6 +38,8 @@ export default function JuegoPage() {
   const [toastMessage, setToastMessage] = useState<string>('');
   // remoteCartas holds incoming CARTA_JUGADA events to ensure all clients render played cards immediately
   const [remoteCartas, setRemoteCartas] = useState<any[]>([]);
+  // remoteSelections holds incoming ATRIBUTO_SELECCIONADO events (player chose attribute for a card)
+  const [remoteSelections, setRemoteSelections] = useState<Array<{ jugadorId: string; cartaCodigo?: string; atributo?: string; nombreJugador?: string; timestamp?: string }>>([]);
 
   // Helpers to avoid using `any` in touch/event parsing
   type TouchLike = { length?: number; [index: number]: unknown };
@@ -363,10 +365,35 @@ export default function JuegoPage() {
       try {
         // Push to remoteCartas for immediate rendering by Mesa
         try { setRemoteCartas((prev) => [...(prev || []), p]); } catch {}
+        // If a selection exists for this played card, remove it
+        try {
+          const pc = String(p.codigoCarta ?? p.datos?.codigo ?? p.codigo ?? '');
+          const pj = String(p.jugadorId ?? p.datos?.jugadorId ?? '');
+          setRemoteSelections((prev) => (prev || []).filter(s => !(String(s.cartaCodigo ?? '') === pc && String(s.jugadorId ?? '') === pj)));
+        } catch {}
       } catch {}
     },
     onAtributoSeleccionado: (p: any) => {
       try { handlers.onAtributoSeleccionado?.(p); } catch {}
+      try {
+        // Record remote selection so Mesa can show which attribute was chosen (even before card is played)
+        try {
+          const sel = {
+            jugadorId: String(p.jugadorId ?? p.datos?.jugadorId ?? ''),
+            cartaCodigo: String(p.cartaCodigo ?? p.datos?.codigo ?? p.codigo ?? ''),
+            atributo: String(p.atributo ?? p.datos?.atributo ?? ''),
+            nombreJugador: String(p.nombreJugador ?? p.datos?.nombreJugador ?? p.nombre ?? ''),
+            timestamp: String(p.timestamp ?? new Date().toISOString()),
+          };
+          if (sel.jugadorId) {
+            setRemoteSelections((prev) => {
+              const copy = (prev || []).filter((x) => !(String(x.jugadorId) === String(sel.jugadorId) && String(x.cartaCodigo ?? '') === String(sel.cartaCodigo ?? '')));
+              copy.push(sel);
+              return copy;
+            });
+          }
+        } catch {}
+      } catch {}
     },
     onTurnoCambiado: (p: any) => {
       try { handlers.onPartidaIniciada?.(p); } catch {}
@@ -407,6 +434,7 @@ export default function JuegoPage() {
       try {
         // Clear remoteCartas when a round is resolved (they move to winner's deck)
         try { setRemoteCartas([]); } catch {}
+        try { setRemoteSelections([]); } catch {}
       } catch {}
     },
   // include relevant deps so memo updates when contexto cambia
@@ -1252,7 +1280,7 @@ export default function JuegoPage() {
               >
                 <div className="bg-black/80 p-6 rounded-lg border border-orange-500/30">
                   <h2 className="text-xl font-bold text-orange-500">Mesa</h2>
-                  <Mesa className="mt-4" jugadores={(jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby)} selectedAtributo={atributoSeleccionado ?? detalle?.atributoSeleccionado ?? null} selectedCartaCodigo={selectedCartaLocal ?? null} extraCartas={remoteCartas} />
+                  <Mesa className="mt-4" jugadores={(jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby)} selectedAtributo={atributoSeleccionado ?? detalle?.atributoSeleccionado ?? null} selectedCartaCodigo={selectedCartaLocal ?? null} extraCartas={remoteCartas} selections={remoteSelections} />
                 </div>
 
                 <div className="bg-black/80 p-4 rounded-lg border border-orange-500/30">
