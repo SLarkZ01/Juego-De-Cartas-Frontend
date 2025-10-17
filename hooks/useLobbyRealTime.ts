@@ -28,6 +28,13 @@ export function useLobbyRealTime(
   onPartidaEliminada?: () => void,
   onPartidaMessage?: (payload: EventoWebSocket) => void,
   onCountsMessage?: (payload: Record<string, number> | Record<string, unknown>) => void,
+  typedHandlers?: {
+    onPartidaState?: (payload: any) => void;
+    onCartaJugada?: (payload: any) => void;
+    onAtributoSeleccionado?: (payload: any) => void;
+    onTurnoCambiado?: (payload: any) => void;
+    onRondaResuelta?: (payload: any) => void;
+  }
 ) {
   const clientRef = useRef<Client | null>(null);
   const [jugadores, setJugadores] = useState<JugadorDTO[]>([]);
@@ -88,6 +95,28 @@ export function useLobbyRealTime(
               // si el callback existe y el mensaje tiene estructura compatible, llamarlo
               if (onPartidaMessage && parsed && typeof parsed === 'object') {
                 try { onPartidaMessage(parsed as EventoWebSocket); } catch (e) { console.warn('[useLobbyRealTime] onPartidaMessage error', e); }
+              }
+              // route to typed handlers when provided
+              try {
+                const p = parsed as Record<string, any>;
+                const tipo = String((p.tipo ?? '')).toUpperCase();
+                if (tipo === 'PARTIDA_STATE' || Array.isArray(p.jugadores) || p.partida) {
+                  try { typedHandlers?.onPartidaState && typedHandlers.onPartidaState(p); } catch {}
+                }
+                if (tipo === 'CARTA_JUGADA' || tipo === 'CARTA_PLAYED') {
+                  try { typedHandlers?.onCartaJugada && typedHandlers.onCartaJugada(p); } catch {}
+                }
+                if (tipo === 'ATRIBUTO_SELECCIONADO' || tipo === 'ATRIBUTO_SELECTED') {
+                  try { typedHandlers?.onAtributoSeleccionado && typedHandlers.onAtributoSeleccionado(p); } catch {}
+                }
+                if (tipo === 'TURNO_CAMBIADO' || tipo === 'TURN_CHANGED' || tipo.indexOf('TURNO') === 0) {
+                  try { typedHandlers?.onTurnoCambiado && typedHandlers.onTurnoCambiado(p); } catch {}
+                }
+                if (tipo === 'RONDA_RESUELTA' || tipo === 'ROUND_RESOLVED') {
+                  try { typedHandlers?.onRondaResuelta && typedHandlers.onRondaResuelta(p); } catch {}
+                }
+              } catch {
+                // ignore routing errors
               }
               // Handle partida eliminada only when backend explicitly sends eliminada === true
               const payload = parsed as Record<string, unknown>;

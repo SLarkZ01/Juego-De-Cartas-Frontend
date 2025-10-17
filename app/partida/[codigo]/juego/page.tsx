@@ -287,10 +287,125 @@ export default function JuegoPage() {
     try { if (handleCountsRef.current) handleCountsRef.current(payload); } catch {}
   }, [handlers]);
 
-  const { jugadores: jugadoresLobby, connected, registerSession, client, turnoActual: turnoLobby } = useLobbyRealTime(codigo, jugadorId, undefined, onLobbyPartidaMessage, countsCallback);
+  const typedHandlers = React.useMemo(() => ({
+    onPartidaState: (p: any) => {
+      try { handlers.onPartidaIniciada?.(p); } catch {}
+      try { if (handlePartidaRef.current) handlePartidaRef.current(p); } catch {}
+      // Attempt to reconcile the local detalle / mano when the server includes jugadores snapshot
+      try {
+        const incoming = p as Record<string, any>;
+        const myIdLocal = detalle?.jugadorId ?? jugadorId ?? readJugadorId(codigo);
+        if (myIdLocal && Array.isArray(incoming.jugadores)) {
+          const me = incoming.jugadores.find((j: any) => String(j.id) === String(myIdLocal) || String((j.userId ?? '')) === String(myIdLocal));
+          if (me) {
+            // If the server sent the explicit cartasEnMano array, update detalle and manoOrder immediately
+            if (Array.isArray(me.cartasEnMano)) {
+              try {
+                setDetalle((prev) => {
+                  const next = prev ? { ...prev } as any : { codigo } as any;
+                  next.miJugador = { ...(next.miJugador ?? {}), ...(me ?? {}) };
+                  return next;
+                });
+                // Update local hand order to server-provided order
+                try { setManoOrder(me.cartasEnMano); } catch {}
+              } catch {}
+            } else if (typeof me.numeroCartas === 'number') {
+              // If only counts changed, but we don't have cartasEnMano, try a throttled detalle fetch
+              try {
+                const now = Date.now();
+                const last = lastDetalleFetchRef.current || 0;
+                if (now - last > 700) {
+                  lastDetalleFetchRef.current = now;
+                  const myId = String(myIdLocal);
+                  partidaService.obtenerPartidaDetalle(codigo, myId).then((nuevo) => {
+                    if (nuevo) {
+                      setDetalle(nuevo);
+                      try { setMiJugador && setMiJugador(nuevo.miJugador); } catch {}
+                      if (nuevo.miJugador && Array.isArray(nuevo.miJugador.cartasEnMano)) {
+                        try { setManoOrder(nuevo.miJugador.cartasEnMano); } catch {}
+                      }
+                    }
+                  }).catch(() => {});
+                }
+              } catch {}
+            }
+          }
+        }
+      } catch (e) {
+        // ignore reconciliation errors
+      }
+      try {
+        // Diagnostic: log decision state after processing PARTIDA_STATE
+        try {
+          const payload = p as Record<string, any>;
+          const myIdLocal = detalle?.jugadorId ?? jugadorId ?? readJugadorId(codigo);
+          const playersForLog = (jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby) || [];
+          const resolved = ((): string => {
+            try {
+              const raw = (payload?.expectedPlayerId ?? payload?.turnoActual ?? '');
+              if (!raw) return '';
+              for (const pl of playersForLog) {
+                const asAny = pl as any;
+                if (String(pl.id) === String(raw) || String(asAny.userId ?? '') === String(raw)) return String(pl.id);
+              }
+              return String(raw);
+            } catch { return '' }
+          })();
+          const quickCanDrop = Boolean(resolved && myIdLocal && String(resolved) === String(myIdLocal) && (cartasEnMesa && cartasEnMesa.length ? true : (atributoSeleccionado ?? detalle?.atributoSeleccionado)) );
+          console.debug('[DEBUG][PARTIDA_STATE] payload.tipo=', payload?.tipo, 'resolvedExpected=', resolved, 'canonicalMyId=', myIdLocal, 'players=', playersForLog.map((x:any)=>({id:x.id, numeroCartas:x.numeroCartas})), 'quickCanDrop=', quickCanDrop);
+        } catch (e) {}
+      } catch {}
+    },
+    onCartaJugada: (p: any) => {
+      try { handlers.onCartaJugada?.(p); } catch {}
+    },
+    onAtributoSeleccionado: (p: any) => {
+      try { handlers.onAtributoSeleccionado?.(p); } catch {}
+    },
+    onTurnoCambiado: (p: any) => {
+      try { handlers.onPartidaIniciada?.(p); } catch {}
+      try {
+        // Diagnostic log for turno cambiado
+        const payload = p as Record<string, any>;
+        const myIdLocal = detalle?.jugadorId ?? jugadorId ?? readJugadorId(codigo);
+        const playersForLog = (jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby) || [];
+        const expectedRaw = String(payload?.expectedPlayerId ?? payload?.expected ?? payload?.turnoActual ?? '');
+        const resolved = ((): string => {
+          try {
+            if (!expectedRaw) return '';
+            for (const pl of playersForLog) {
+              const asAny = pl as any;
+              if (String(pl.id) === String(expectedRaw) || String(asAny.userId ?? '') === String(expectedRaw)) return String(pl.id);
+            }
+            return expectedRaw;
+          } catch { return expectedRaw }
+        })();
+        const quickCanDrop = Boolean(resolved && myIdLocal && String(resolved) === String(myIdLocal) && (cartasEnMesa && cartasEnMesa.length ? true : (atributoSeleccionado ?? detalle?.atributoSeleccionado)) );
+        console.debug('[DEBUG][TURNO_CAMBIADO] expectedRaw=', expectedRaw, 'resolvedExpected=', resolved, 'canonicalMyId=', myIdLocal, 'players=', playersForLog.map((x:any)=>({id:x.id, numeroCartas:x.numeroCartas})), 'quickCanDrop=', quickCanDrop);
+        try {
+          if (resolved) {
+            try { setTurnoEsperado && setTurnoEsperado(resolved); } catch {}
+            // Give a short window to allow the expected player to act immediately
+            try {
+              if (String(resolved) === String(canonicalMyId)) {
+                setForceEnableTurn(true);
+                setTimeout(() => setForceEnableTurn(false), 3000);
+              }
+            } catch {}
+          }
+        } catch {}
+      } catch (e) {}
+    },
+    onRondaResuelta: (p: any) => {
+      try { handlers.onRondaResuelta?.(p); } catch {}
+    },
+  // include relevant deps so memo updates when contexto cambia
+  }), [handlers, detalle, jugadorId, codigo, setDetalle, setManoOrder, setMiJugador]);
+
+  const { jugadores: jugadoresLobby, connected, registerSession, client, turnoActual: turnoLobby } = useLobbyRealTime(codigo, jugadorId, undefined, onLobbyPartidaMessage, countsCallback, typedHandlers);
 
   // Use the low-level client to sync the players panel from PartidaResponse messages (but do not auto-subscribe)
-  const { jugadores: jugadoresPanel, setJugadores: setJugadoresPanel, turnoActual: turnoPanel, turnoEsperado, handlePartidaPayload, handleCountsPayload } = usePartidaPanelSync(client ?? null, codigo, detalle?.jugadorId ?? jugadorId as string | null, { autoSubscribe: false });
+  const { jugadores: jugadoresPanel, setJugadores: setJugadoresPanel, turnoActual: turnoPanel, turnoEsperado, setTurnoEsperado, handlePartidaPayload, handleCountsPayload } = usePartidaPanelSync(client ?? null, codigo, detalle?.jugadorId ?? jugadorId as string | null, { autoSubscribe: false });
 
   // wire the panel's counts handler into the ref so central countsCallback can forward to it
   React.useEffect(() => {
