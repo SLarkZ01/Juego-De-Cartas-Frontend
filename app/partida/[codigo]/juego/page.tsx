@@ -36,6 +36,8 @@ export default function JuegoPage() {
   const [detalle, setDetalle] = useState<PartidaDetailResponse | null>(null);
   const [cartasDB, setCartasDB] = useState<Record<string, Carta>>({});
   const [toastMessage, setToastMessage] = useState<string>('');
+  // remoteCartas holds incoming CARTA_JUGADA events to ensure all clients render played cards immediately
+  const [remoteCartas, setRemoteCartas] = useState<any[]>([]);
 
   // Helpers to avoid using `any` in touch/event parsing
   type TouchLike = { length?: number; [index: number]: unknown };
@@ -358,6 +360,10 @@ export default function JuegoPage() {
     },
     onCartaJugada: (p: any) => {
       try { handlers.onCartaJugada?.(p); } catch {}
+      try {
+        // Push to remoteCartas for immediate rendering by Mesa
+        try { setRemoteCartas((prev) => [...(prev || []), p]); } catch {}
+      } catch {}
     },
     onAtributoSeleccionado: (p: any) => {
       try { handlers.onAtributoSeleccionado?.(p); } catch {}
@@ -398,6 +404,10 @@ export default function JuegoPage() {
     },
     onRondaResuelta: (p: any) => {
       try { handlers.onRondaResuelta?.(p); } catch {}
+      try {
+        // Clear remoteCartas when a round is resolved (they move to winner's deck)
+        try { setRemoteCartas([]); } catch {}
+      } catch {}
     },
   // include relevant deps so memo updates when contexto cambia
   }), [handlers, detalle, jugadorId, codigo, setDetalle, setManoOrder, setMiJugador]);
@@ -1242,7 +1252,7 @@ export default function JuegoPage() {
               >
                 <div className="bg-black/80 p-6 rounded-lg border border-orange-500/30">
                   <h2 className="text-xl font-bold text-orange-500">Mesa</h2>
-                  <Mesa className="mt-4" jugadores={(jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby)} selectedAtributo={atributoSeleccionado ?? detalle?.atributoSeleccionado ?? null} selectedCartaCodigo={selectedCartaLocal ?? null} />
+                  <Mesa className="mt-4" jugadores={(jugadoresPanel && jugadoresPanel.length ? jugadoresPanel : jugadoresLobby)} selectedAtributo={atributoSeleccionado ?? detalle?.atributoSeleccionado ?? null} selectedCartaCodigo={selectedCartaLocal ?? null} extraCartas={remoteCartas} />
                 </div>
 
                 <div className="bg-black/80 p-4 rounded-lg border border-orange-500/30">

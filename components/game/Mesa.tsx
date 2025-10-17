@@ -13,9 +13,10 @@ type Props = {
   jugadores?: Array<any>;
   selectedAtributo?: string | null;
   selectedCartaCodigo?: string | null;
+  extraCartas?: any[];
 };
 
-export default function Mesa({ className = '', jugadores = [], selectedAtributo = null, selectedCartaCodigo = null }: Props) {
+export default function Mesa({ className = '', jugadores = [], selectedAtributo = null, selectedCartaCodigo = null, extraCartas = [] }: Props) {
   const { setNodeRef, isOver } = useDroppable({ id: 'mesa' });
   // Intentar cargar imagen desde public; si no existe, usar un fallback de color
   const bgStyle: React.CSSProperties = { backgroundImage: "url('/mesa.webp')" };
@@ -184,9 +185,17 @@ export default function Mesa({ className = '', jugadores = [], selectedAtributo 
             </div>
           )}
 
-          {cartasEnMesa && cartasEnMesa.map((c: any, idx: number) => (
-            <CartaMesa key={`${String(c.jugadorId)}_${idx}`} carta={c} idx={idx} />
-          ))}
+          {(() => {
+            const combined: any[] = [];
+            const seen = new Set<string>();
+            const pushIfNew = (c: any) => {
+              const id = `${String(c.jugadorId ?? c.jugadorId)}_${String(c.codigoCarta ?? c.codigo ?? c.datos?.codigo ?? '')}`;
+              if (!seen.has(id)) { seen.add(id); combined.push(c); }
+            };
+            (cartasEnMesa || []).forEach((c: any) => pushIfNew(c));
+            (extraCartas || []).forEach((c: any) => pushIfNew(c));
+            return combined.map((c, idx) => <CartaMesa key={`${String(c.jugadorId)}_${idx}`} carta={c} idx={idx} />);
+          })()}
         </div>
       </div>
     </div>
